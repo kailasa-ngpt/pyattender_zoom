@@ -5,6 +5,10 @@ import hashlib
 import json
 from typing import Dict, List
 import os
+from datetime import datetime
+
+def import_time() -> str:
+    return datetime.utcnow().isoformat()
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -132,6 +136,11 @@ async def get_verification_status():
             for i, verified in enumerate(account_manager.verified_tokens.values())
         }
     }
+
+@app.get("/test")
+async def health_check():
+    """Simple health check endpoint"""
+    return {"status": "ok"}
 
 @app.post("/reset-token")
 async def reset_token(request: Request):
