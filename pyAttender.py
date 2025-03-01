@@ -42,18 +42,85 @@ class ZoomAccountManager:
         self.load_tokens_from_env()
 
     def load_tokens_from_env(self):
-        """Load webhook secret tokens from environment variables"""
+        """Load webhook secret tokens and their verification status from environment variables"""
         i = 1
         while True:
-            token = os.getenv(f'ZOOM_WEBHOOK_SECRET_{i}')
-            if token is None:
+            token_entry = os.getenv(f'ZOOM_WEBHOOK_SECRET_{i}')
+            if token_entry is None:
                 break
+                
+            # Check if token has a verification state attached with '|' separator
+            if '|' in token_entry:
+                token, verified_str = token_entry.split('|', 1)
+                verified = verified_str.lower() == 'true'
+            else:
+                token = token_entry
+                verified = False
+                
             self.tokens.append(token)
-            self.verified_tokens[token] = False
+            self.verified_tokens[token] = verified
             i += 1
         
         if not self.tokens:
             raise ValueError("No Zoom webhook secret tokens found in environment variables")
+            
+        # Log current verification status
+        verified_count = sum(1 for v in self.verified_tokens.values() if v)
+        print(f"Loaded {len(self.tokens)} tokens, {verified_count} already verified")
+
+    def save_verification_status(self):
+        """Save verification status to .env file"""
+        try:
+            # Read existing .env file
+            env_path = os.path.join(os.getcwd(), '.env')
+            if not os.path.exists(env_path):
+                print("Warning: .env file not found, cannot save verification status")
+                return
+                
+            with open(env_path, 'r') as file:
+                lines = file.readlines()
+            
+            # Update token verification status in .env content
+            new_lines = []
+            for line in lines:
+                line = line.strip()
+                if line.startswith('ZOOM_WEBHOOK_SECRET_'):
+                    # Extract the token number and current value
+                    parts = line.split('=', 1)
+                    if len(parts) != 2:
+                        new_lines.append(line)
+                        continue
+                        
+                    key, value = parts
+                    token_num = key.split('_')[-1]
+                    
+                    # Find if this is a token we know about
+                    try:
+                        token_index = int(token_num) - 1
+                        if token_index < len(self.tokens):
+                            token = self.tokens[token_index]
+                            # Replace or add verification status
+                            if '|' in value:
+                                token_value = value.split('|', 1)[0]
+                            else:
+                                token_value = value
+                            new_line = f"{key}={token_value}|{str(self.verified_tokens[token]).lower()}"
+                            new_lines.append(new_line)
+                        else:
+                            new_lines.append(line)
+                    except (ValueError, IndexError):
+                        new_lines.append(line)
+                else:
+                    new_lines.append(line)
+            
+            # Write updated content back to .env file
+            with open(env_path, 'w') as file:
+                file.write('\n'.join(new_lines))
+                
+            print(f"Saved verification status to .env file")
+            
+        except Exception as e:
+            print(f"Error saving verification status: {e}")
 
     def get_next_unverified_token(self) -> str:
         """Get the next unverified token in sequence"""
@@ -63,9 +130,11 @@ class ZoomAccountManager:
         return self.tokens[0]  # If all verified, return first token
 
     def mark_token_as_verified(self, token: str):
-        """Mark a specific token as verified"""
+        """Mark a specific token as verified and save status"""
         if token in self.verified_tokens:
             self.verified_tokens[token] = True
+            # Save the updated verification status to .env
+            self.save_verification_status()
 
     def verify_signature(self, signature: str, message: str) -> bool:
         """Try to verify signature with all tokens"""
@@ -545,19 +614,27 @@ async def start_hourly_reports_for_meeting(meeting_uuid):
 
 @app.post("/zoom/webhook")
 async def zoom_webhook(request: Request):
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{current_time}] Webhook received. Processing...")
+    
     # Get the raw body content
     body = await request.body()
     body_str = body.decode('utf-8')
     
     try:
         data = json.loads(body_str)
+        event_type = data.get("event", "unknown")
+        print(f"[{current_time}] Webhook event type: {event_type}")
     except json.JSONDecodeError:
+        print(f"[{current_time}] Error parsing webhook JSON")
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     # Case 1: Endpoint URL Validation
-    if data.get("event") == "endpoint.url_validation":
+    if event_type == "endpoint.url_validation":
+        print(f"[{current_time}] Processing endpoint validation")
         plain_token = data.get("payload", {}).get("plainToken")
         if not plain_token:
+            print(f"[{current_time}] Error: No plain token provided")
             raise HTTPException(status_code=400, detail="No plain token provided")
         
         # Use the first available token for validation
@@ -570,16 +647,16 @@ async def zoom_webhook(request: Request):
         # Log verification status
         verified_count = sum(account_manager.verified_tokens.values())
         total_count = len(account_manager.tokens)
-        print(f"Verified {verified_count} out of {total_count} accounts")
+        print(f"[{current_time}] Verified {verified_count} out of {total_count} accounts")
         
+        print(f"[{current_time}] Validation successful, returning encrypted token")
         return JSONResponse(content={
             "plainToken": plain_token,
             "encryptedToken": encrypted_token
         })
 
     # Case 2: Regular Webhook Events (no signature verification needed)
-    # Process the webhook event based on the event type
-    event_type = data.get("event")
+    print(f"[{current_time}] Processing regular webhook: {event_type}")
     
     # Process webhook data
     meeting_state.process_webhook(data)
@@ -588,9 +665,11 @@ async def zoom_webhook(request: Request):
     if event_type == "meeting.started" and "payload" in data and "object" in data["payload"]:
         meeting_uuid = data["payload"]["object"].get("uuid")
         if meeting_uuid:
+            print(f"[{current_time}] Starting hourly reports for meeting: {meeting_uuid}")
             # Start background task for hourly reports
             asyncio.create_task(start_hourly_reports_for_meeting(meeting_uuid))
     
+    print(f"[{current_time}] Webhook processing complete for {event_type}")
     return {
         "status": "success",
         "message": f"Webhook processed for event: {event_type}"
