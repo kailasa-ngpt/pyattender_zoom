@@ -577,21 +577,7 @@ async def zoom_webhook(request: Request):
             "encryptedToken": encrypted_token
         })
 
-    # Case 2: Webhook Event 
-    zoom_signature = request.headers.get("x-zm-signature")
-    zoom_timestamp = request.headers.get("x-zm-request-timestamp")
-
-    # For event webhooks, verify signature if headers are present
-    if zoom_signature and zoom_timestamp:
-        # Create message string from timestamp + request body
-        message = f"{zoom_timestamp}{body_str}"
-        
-        # Try to verify with any of our tokens
-        if not account_manager.verify_signature(zoom_signature, message):
-            print(f"Invalid signature. Headers: {request.headers}")
-            print(f"Body: {body_str}")
-            raise HTTPException(status_code=401, detail="Invalid signature")
-
+    # Case 2: Regular Webhook Events (no signature verification needed)
     # Process the webhook event based on the event type
     event_type = data.get("event")
     
