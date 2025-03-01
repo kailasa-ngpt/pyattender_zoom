@@ -12,7 +12,6 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import pathlib
 import asyncio
 import time
-from contextlib import asynccontextmanager
 
 def import_time() -> str:
     return datetime.utcnow().isoformat()
@@ -23,16 +22,16 @@ load_dotenv()
 
 app = FastAPI()
 
-# Set up background tasks for meeting state manager using lifespan
-@asynccontextmanager
-async def lifespan(app):
+# Set up background tasks for meeting state manager
+@app.on_event("startup")
+async def startup_event():
     # This will be called when the FastAPI app starts
     asyncio.create_task(meeting_state._schedule_eod_reports())
-    yield
-    # This will be called when the FastAPI app shuts down
+    
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Any cleanup needed when shutting down
     pass
-
-app = FastAPI(lifespan=lifespan)
 
 class ZoomAccountManager:
     def __init__(self):
@@ -385,8 +384,8 @@ class MeetingStateManager:
         report_dir = self.reports_dir / date_str
         report_dir.mkdir(parents=True, exist_ok=True)
         
-        # Report filename: "Topic_HourlyReport_meeting_uuid.xlsx"
-        report_filename = f"{topic}_HourlyReport_{meeting_uuid}.xlsx"
+        # Report filename: "Topic | HourlyReport | meeting_uuid.xlsx"
+        report_filename = f"{topic} | HourlyReport | {meeting_uuid}.xlsx"
         report_path = report_dir / report_filename
         
         # Create workbook
@@ -434,8 +433,7 @@ class MeetingStateManager:
         
         # Fill data
         for row, hour_data in enumerate(hourly_data, 2):
-            # Format as the ending time for the hour (e.g., 8:00 AM for the 7-8 AM hour)
-            time_str = hour_data["time"].add(hours=1).format('hh:00 A')
+            time_str = hour_data["time"].format('hh:00 A')
             
             ws.cell(row=row, column=1, value=f"{time_str} ET")
             ws.cell(row=row, column=2, value=hour_data["stats"]["participants_count"])
@@ -462,8 +460,8 @@ class MeetingStateManager:
         report_dir = self.reports_dir / date_str
         report_dir.mkdir(parents=True, exist_ok=True)
         
-        # Report filename: "Topic_EoD_meeting_uuid.xlsx"
-        report_filename = f"{topic}_EoD_{meeting_uuid}.xlsx"
+        # Report filename: "Topic | EoD | meeting_uuid.xlsx"
+        report_filename = f"{topic} | EoD | {meeting_uuid}.xlsx"
         report_path = report_dir / report_filename
         
         # Create workbook
@@ -554,39 +552,43 @@ async def zoom_webhook(request: Request):
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # Case 1: Initial Verification
-    if "plainToken" in data:
-        plain_token = data["plainToken"]
+    # Case 1: Endpoint URL Validation
+    if data.get("event") == "endpoint.url_validation":
+        plain_token = data.get("payload", {}).get("plainToken")
+        if not plain_token:
+            raise HTTPException(status_code=400, detail="No plain token provided")
+        
+        # Use the first available token for validation
         current_token = account_manager.get_next_unverified_token()
         encrypted_token = generate_hash(plain_token, current_token)
         
         # Mark this token as verified
         account_manager.mark_token_as_verified(current_token)
         
-        # Log verification status (you might want to store this in a database)
+        # Log verification status
         verified_count = sum(account_manager.verified_tokens.values())
         total_count = len(account_manager.tokens)
         print(f"Verified {verified_count} out of {total_count} accounts")
         
-        return JSONResponse(content={"encryptedToken": encrypted_token})
+        return JSONResponse(content={
+            "plainToken": plain_token,
+            "encryptedToken": encrypted_token
+        })
 
-    # Case 2: Webhook Event
+    # Case 2: Webhook Event 
     zoom_signature = request.headers.get("x-zm-signature")
     zoom_timestamp = request.headers.get("x-zm-request-timestamp")
 
-    # For testing purposes, bypass signature verification completely
-    # In production, you would uncomment the code below
-    """
-    if not zoom_signature or not zoom_timestamp:
-        raise HTTPException(status_code=400, detail="Missing required headers")
-
-    # Create message string from timestamp + request body
-    message = f"{zoom_timestamp}{body_str}"
-    
-    # Try to verify with any of our tokens
-    if not account_manager.verify_signature(zoom_signature, message):
-        raise HTTPException(status_code=401, detail="Invalid signature")
-    """
+    # For event webhooks, verify signature if headers are present
+    if zoom_signature and zoom_timestamp:
+        # Create message string from timestamp + request body
+        message = f"{zoom_timestamp}{body_str}"
+        
+        # Try to verify with any of our tokens
+        if not account_manager.verify_signature(zoom_signature, message):
+            print(f"Invalid signature. Headers: {request.headers}")
+            print(f"Body: {body_str}")
+            raise HTTPException(status_code=401, detail="Invalid signature")
 
     # Process the webhook event based on the event type
     event_type = data.get("event")
