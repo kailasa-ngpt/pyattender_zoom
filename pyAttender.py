@@ -434,7 +434,8 @@ class MeetingStateManager:
         
         # Fill data
         for row, hour_data in enumerate(hourly_data, 2):
-            time_str = hour_data["time"].format('hh:00 A')
+            # Format as the ending time for the hour (e.g., 8:00 AM for the 7-8 AM hour)
+            time_str = hour_data["time"].add(hours=1).format('hh:00 A')
             
             ws.cell(row=row, column=1, value=f"{time_str} ET")
             ws.cell(row=row, column=2, value=hour_data["stats"]["participants_count"])
