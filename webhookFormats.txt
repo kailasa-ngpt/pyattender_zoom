@@ -1,0 +1,787 @@
+meeting.started
+	Layout
+		{
+		  "event": "…",
+		  "event_ts": 1,
+		  "payload": {
+		    "account_id": "…",
+		    "object": {
+		      "id": "…",
+		      "uuid": "…",
+		      "host_id": "…",
+		      "topic": "…",
+		      "type": 0,
+		      "start_time": "2025-02-25T22:01:08.294Z",
+		      "timezone": "…",
+		      "duration": 1
+		    }
+		  }
+		}
+	Schema
+		{
+		  "schema": {
+		    "type": "object",
+		    "required": [
+		      "event",
+		      "event_ts",
+		      "payload"
+		    ],
+		    "properties": {
+		      "event": {
+		        "type": "string",
+		        "description": "The name of the event."
+		      },
+		      "event_ts": {
+		        "type": "integer",
+		        "format": "int64",
+		        "description": "A timestamp at which the event occurred."
+		      },
+		      "payload": {
+		        "type": "object",
+		        "required": [
+		          "account_id",
+		          "object"
+		        ],
+		        "properties": {
+		          "account_id": {
+		            "type": "string",
+		            "description": "The account ID of the user who created the meeting."
+		          },
+		          "object": {
+		            "type": "object",
+		            "description": "Information about the meeting.",
+		            "required": [
+		              "id",
+		              "uuid",
+		              "host_id",
+		              "topic",
+		              "type",
+		              "start_time",
+		              "duration"
+		            ],
+		            "properties": {
+		              "id": {
+		                "type": "string",
+		                "description": "The meeting ID."
+		              },
+		              "uuid": {
+		                "type": "string",
+		                "description": "The meeting's universally unique identifier (UUID). Each meeting instance generates a meeting UUID."
+		              },
+		              "host_id": {
+		                "type": "string",
+		                "description": "The meeting host's user ID."
+		              },
+		              "topic": {
+		                "type": "string",
+		                "description": "The meeting's topic."
+		              },
+		              "type": {
+		                "type": "integer",
+		                "description": "The meeting type: \n* 0 — A prescheduled meeting. \n* 1 — An instant meeting. \n* 2 — A scheduled meeting. \n* 3 — A recurring meeting with no fixed time. \n* 4 — A [personal meeting room](https://support.zoom.us/hc/en-us/articles/201362843). \n* 7 — A [PAC (Personal Audio Conference)](https://support.zoom.us/hc/en-us/articles/205172455-Hosting-a-Personal-Audio-Conference-PAC-meeting) meeting. \n* 8 — A recurring meeting with a fixed time.",
+		                "enum": [
+		                  0,
+		                  1,
+		                  2,
+		                  3,
+		                  4,
+		                  7,
+		                  8
+		                ]
+		              },
+		              "start_time": {
+		                "type": "string",
+		                "format": "date-time",
+		                "description": "The meeting's start time."
+		              },
+		              "timezone": {
+		                "type": "string",
+		                "description": "The meeting's [timezone](https://marketplace.zoom.us/docs/api-reference/other-references/abbreviation-lists#timezones)."
+		              },
+		              "duration": {
+		                "type": "integer",
+		                "description": "The scheduled meeting duration."
+		              }
+		            },
+		            "additionalProperties": false
+		          }
+		        },
+		        "additionalProperties": false
+		      }
+		    },
+		    "additionalProperties": false
+		  }
+		}
+
+meeting.ended
+	Layout
+		{
+		  "event": "…",
+		  "event_ts": 1,
+		  "payload": {
+		    "account_id": "…",
+		    "object": {
+		      "id": "…",
+		      "uuid": "…",
+		      "host_id": "…",
+		      "topic": "…",
+		      "type": 0,
+		      "start_time": "2025-02-25T22:01:08.294Z",
+		      "timezone": "…",
+		      "duration": 1,
+		      "end_time": "2025-02-25T22:01:08.294Z"
+		    }
+		  }
+		}
+	Schema
+		{
+		  "schema": {
+		    "type": "object",
+		    "required": [
+		      "event",
+		      "event_ts",
+		      "payload"
+		    ],
+		    "properties": {
+		      "event": {
+		        "type": "string",
+		        "description": "The name of the event."
+		      },
+		      "event_ts": {
+		        "type": "integer",
+		        "format": "int64",
+		        "description": "A timestamp at which the event occurred."
+		      },
+		      "payload": {
+		        "type": "object",
+		        "required": [
+		          "account_id",
+		          "object"
+		        ],
+		        "properties": {
+		          "account_id": {
+		            "type": "string",
+		            "description": "The account ID of the user who created the meeting."
+		          },
+		          "object": {
+		            "type": "object",
+		            "description": "Information about the meeting.",
+		            "required": [
+		              "id",
+		              "uuid",
+		              "host_id",
+		              "topic",
+		              "type",
+		              "start_time",
+		              "duration",
+		              "end_time"
+		            ],
+		            "properties": {
+		              "id": {
+		                "type": "string",
+		                "description": "The meeting ID."
+		              },
+		              "uuid": {
+		                "type": "string",
+		                "description": "The meeting's universally unique identifier (UUID). Each meeting instance generates a meeting UUID."
+		              },
+		              "host_id": {
+		                "type": "string",
+		                "description": "The meeting host's user ID."
+		              },
+		              "topic": {
+		                "type": "string",
+		                "description": "The meeting's topic."
+		              },
+		              "type": {
+		                "type": "integer",
+		                "description": "The meeting type: \n* 0 — A prescheduled meeting. \n* 1 — An instant meeting. \n* 2 — A scheduled meeting. \n* 3 — A recurring meeting with no fixed time. \n* 4 — A [personal meeting room](https://support.zoom.us/hc/en-us/articles/201362843). \n* 7 — A [PAC (Personal Audio Conference)](https://support.zoom.us/hc/en-us/articles/205172455-Hosting-a-Personal-Audio-Conference-PAC-meeting) meeting. \n* 8 — A recurring meeting with a fixed time.",
+		                "enum": [
+		                  0,
+		                  1,
+		                  2,
+		                  3,
+		                  4,
+		                  7,
+		                  8
+		                ]
+		              },
+		              "start_time": {
+		                "type": "string",
+		                "format": "date-time",
+		                "description": "The meeting's start time."
+		              },
+		              "timezone": {
+		                "type": "string",
+		                "description": "The meeting's [timezone](https://marketplace.zoom.us/docs/api-reference/other-references/abbreviation-lists#timezones)."
+		              },
+		              "duration": {
+		                "type": "integer",
+		                "description": "The scheduled meeting duration."
+		              },
+		              "end_time": {
+		                "type": "string",
+		                "format": "date-time",
+		                "description": "The date and time at which the meeting ended."
+		              }
+		            },
+		            "additionalProperties": false
+		          }
+		        },
+		        "additionalProperties": false
+		      }
+		    },
+		    "additionalProperties": false
+		  }
+		}
+
+meeting.participant_joined
+	Layout
+		{		
+		  "event": "…",
+		  "event_ts": 1,
+		  "payload": {
+		    "account_id": "…",
+		    "object": {
+		      "id": "…",
+		      "uuid": "…",
+		      "host_id": "…",
+		      "topic": "…",
+		      "type": 0,
+		      "start_time": "…",
+		      "timezone": "…",
+		      "duration": 1,
+		      "participant": {
+		        "user_id": "…",
+		        "user_name": "…",
+		        "id": "…",
+		        "participant_uuid": "…",
+		        "join_time": "2025-02-25T22:01:08.294Z",
+		        "email": "hello@example.com",
+		        "registrant_id": "…",
+		        "participant_user_id": "…",
+		        "customer_key": "…",
+		        "phone_number": "8615250064084"
+		      }
+		    }
+		  }
+		}		
+	Schema
+		{
+		  "schema": {
+		    "type": "object",
+		    "required": [
+		      "event",
+		      "event_ts",
+		      "payload"
+		    ],
+		    "properties": {
+		      "event": {
+		        "type": "string",
+		        "description": "The event's name."
+		      },
+		      "event_ts": {
+		        "type": "integer",
+		        "format": "int64",
+		        "description": "A timestamp when the event occurred."
+		      },
+		      "payload": {
+		        "type": "object",
+		        "required": [
+		          "account_id",
+		          "object"
+		        ],
+		        "properties": {
+		          "account_id": {
+		            "type": "string",
+		            "description": "The account ID of the user who created the meeting."
+		          },
+		          "object": {
+		            "type": "object",
+		            "description": "Information about the meeting.",
+		            "required": [
+		              "uuid",
+		              "host_id",
+		              "type",
+		              "duration",
+		              "participant"
+		            ],
+		            "properties": {
+		              "id": {
+		                "type": "string",
+		                "description": "The meeting ID."
+		              },
+		              "uuid": {
+		                "type": "string",
+		                "description": "The meeting's universally unique identifier (UUID). Each meeting instance generates a meeting UUID."
+		              },
+		              "host_id": {
+		                "type": "string",
+		                "description": "The meeting host's user ID."
+		              },
+		              "topic": {
+		                "type": "string",
+		                "description": "The meeting's topic."
+		              },
+		              "type": {
+		                "type": "integer",
+		                "description": "The meeting type. \n* 0 - A prescheduled meeting. \n* 1 - An instant meeting. \n* 2 - A scheduled meeting. \n* 3 - A recurring meeting with no fixed time. \n* 4 - A [personal meeting room](https://support.zoom.us/hc/en-us/articles/201362843). \n* 7 - A [PAC (Personal Audio Conference)](https://support.zoom.us/hc/en-us/articles/205172455-Hosting-a-Personal-Audio-Conference-PAC-meeting) meeting. \n* 8 - A recurring meeting with a fixed time.",
+		                "enum": [
+		                  0,
+		                  1,
+		                  2,
+		                  3,
+		                  4,
+		                  7,
+		                  8
+		                ]
+		              },
+		              "start_time": {
+		                "type": "string",
+		                "pattern": "(^\\s*$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$)",
+		                "description": "The meeting's start time."
+		              },
+		              "timezone": {
+		                "type": "string",
+		                "description": "The meeting's [timezone](https://developers.zoom.us/docs/api/rest/other-references/abbreviation-lists/#timezones)."
+		              },
+		              "duration": {
+		                "type": "integer",
+		                "description": "The scheduled meeting duration."
+		              },
+		              "participant": {
+		                "type": "object",
+		                "description": "Information about the meeting participant. If the participant is **not** part of the host's account, email returns an empty string value, with some exceptions. See [Email address display rules](https://developers.zoom.us/docs/api/rest/using-zoom-apis/#email-address-display-rules) for details.",
+		                "required": [
+		                  "user_id",
+		                  "user_name",
+		                  "email",
+		                  "join_time"
+		                ],
+		                "properties": {
+		                  "user_id": {
+		                    "type": "string",
+		                    "description": "The participant's meeting user ID. This value is assigned to a participant when they join a meeting, and is only valid for the duration of the meeting."
+		                  },
+		                  "user_name": {
+		                    "type": "string",
+		                    "description": "The participant's display name."
+		                  },
+		                  "id": {
+		                    "type": "string",
+		                    "description": "The participant's universally unique ID (UUID). \n* If the participant joins the meeting by logging into Zoom, this value is the id value in the [**Get a user**](/api-reference/zoom-api/methods#operation/user) API response. \n* If the participant joins the meeting **without** logging into Zoom, this returns an empty string value. \n\n This value returns blank for external users.\n\n**Note:** Use the participant_user_id value instead of this value. We will remove this response in a future release."
+		                  },
+		                  "participant_uuid": {
+		                    "type": "string",
+		                    "description": "The participant's UUID for this specific meeting and any breakout rooms created in this meeting. This value is assigned to a participant when they join a meeting, and is only valid for the duration of that meeting."
+		                  },
+		                  "join_time": {
+		                    "type": "string",
+		                    "format": "date-time",
+		                    "description": "The time when the participant joined the meeting."
+		                  },
+		                  "email": {
+		                    "type": "string",
+		                    "format": "email",
+		                    "description": "The participant's email address. This response only returns if the participant joined the meeting by logging into Zoom. If the participant is **not** part of the host's account, this returns an empty string value, with some exceptions. See [Email address display rules](https://developers.zoom.us/docs/api/rest/using-zoom-apis/#email-address-display-rules) for details."
+		                  },
+		                  "registrant_id": {
+		                    "type": "string",
+		                    "description": "The participant's registrant ID. A host or a user with administrative permissions can require [registration for Zoom meetings](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0065026)."
+		                  },
+		                  "participant_user_id": {
+		                    "type": "string",
+		                    "description": "The participant's universally unique ID (UUID). \n* If the participant joins the meeting by logging into Zoom, this value is the id value in the [**Get a user**](/api-reference/zoom-api/methods#operation/user) API response. \n* If the participant joins the meeting **without** logging into Zoom, this returns an empty string value.\n\n This value returns blank for external users."
+		                  },
+		                  "customer_key": {
+		                    "type": "string",
+		                    "description": "The participant's SDK identifier. This value can be alphanumeric."
+		                  },
+		                  "phone_number": {
+		                    "type": "string",
+		                    "description": "Phone number of participant joined via PSTN.",
+		                    "example": "8615250064084"
+		                  }
+		                },
+		                "additionalProperties": false
+		              }
+		            },
+		            "additionalProperties": false
+		          }
+		        },
+		        "additionalProperties": false
+		      }
+		    },
+		    "additionalProperties": false
+		  }
+		}
+
+meeting.participant_left
+	Layout
+		{
+		  "event": "…",
+		  "event_ts": 1,
+		  "payload": {
+		    "account_id": "…",
+		    "object": {
+		      "id": "…",
+		      "uuid": "…",
+		      "host_id": "…",
+		      "topic": "…",
+		      "type": 0,
+		      "start_time": "…",
+		      "timezone": "…",
+		      "duration": 1,
+		      "participant": {
+		        "user_id": "…",
+		        "user_name": "…",
+		        "id": "…",
+		        "participant_uuid": "…",
+		        "leave_time": "2025-02-25T22:01:08.294Z",
+		        "leave_reason": "…",
+		        "email": "hello@example.com",
+		        "registrant_id": "…",
+		        "participant_user_id": "…",
+		        "customer_key": "…",
+		        "phone_number": "8615250064084"
+		      }
+		    }
+		  }
+		}
+	Schema
+		{
+		  "schema": {
+		    "type": "object",
+		    "required": [
+		      "event",
+		      "event_ts",
+		      "payload"
+		    ],
+		    "properties": {
+		      "event": {
+		        "type": "string",
+		        "description": "The event's name."
+		      },
+		      "event_ts": {
+		        "type": "integer",
+		        "format": "int64",
+		        "description": "A timestamp when the event occurred."
+		      },
+		      "payload": {
+		        "type": "object",
+		        "required": [
+		          "account_id",
+		          "object"
+		        ],
+		        "properties": {
+		          "account_id": {
+		            "type": "string",
+		            "description": "The account ID of the user who created the meeting."
+		          },
+		          "object": {
+		            "type": "object",
+		            "description": "Information about the meeting.",
+		            "required": [
+		              "id",
+		              "uuid",
+		              "host_id",
+		              "topic",
+		              "type",
+		              "start_time",
+		              "duration",
+		              "participant"
+		            ],
+		            "properties": {
+		              "id": {
+		                "type": "string",
+		                "description": "The meeting ID."
+		              },
+		              "uuid": {
+		                "type": "string",
+		                "description": "The meeting's universally unique identifier (UUID). Each meeting instance generates a meeting UUID."
+		              },
+		              "host_id": {
+		                "type": "string",
+		                "description": "The meeting host's user ID."
+		              },
+		              "topic": {
+		                "type": "string",
+		                "description": "The meeting's topic."
+		              },
+		              "type": {
+		                "type": "integer",
+		                "description": "The meeting type: \n* 0 — A prescheduled meeting. \n* 1 — An instant meeting. \n* 2 — A scheduled meeting. \n* 3 — A recurring meeting with no fixed time. \n* 4 — A [personal meeting room](https://support.zoom.us/hc/en-us/articles/201362843). \n* 7 — A [PAC (Personal Audio Conference)](https://support.zoom.us/hc/en-us/articles/205172455-Hosting-a-Personal-Audio-Conference-PAC-meeting) meeting. \n* 8 — A recurring meeting with a fixed time.",
+		                "enum": [
+		                  0,
+		                  1,
+		                  2,
+		                  3,
+		                  4,
+		                  7,
+		                  8
+		                ]
+		              },
+		              "start_time": {
+		                "type": "string",
+		                "pattern": "(^\\s*$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$)",
+		                "description": "The meeting's start time."
+		              },
+		              "timezone": {
+		                "type": "string",
+		                "description": "The meeting's [timezone](https://developers.zoom.us/docs/api/rest/other-references/abbreviation-lists/#timezones)."
+		              },
+		              "duration": {
+		                "type": "integer",
+		                "description": "The scheduled meeting duration."
+		              },
+		              "participant": {
+		                "type": "object",
+		                "description": "Information about the meeting participant. If the participant is **not** part of the host's account, email returns an empty string value, with some exceptions. See [Email address display rules](https://developers.zoom.us/docs/api/rest/using-zoom-apis/#email-address-display-rules) for details.",
+		                "required": [
+		                  "user_id",
+		                  "email",
+		                  "leave_time"
+		                ],
+		                "properties": {
+		                  "user_id": {
+		                    "type": "string",
+		                    "description": "The participant's meeting user ID. This value is assigned to a participant when they join a meeting, and is only valid for the duration of the meeting."
+		                  },
+		                  "user_name": {
+		                    "type": "string",
+		                    "description": "The participant's display name."
+		                  },
+		                  "id": {
+		                    "type": "string",
+		                    "description": "The participant's universally unique ID (UUID). \n* If the participant joins the meeting by logging into Zoom, this value is the id value in the [**Get a user**](/api-reference/zoom-api/methods#operation/user) API response. \n* If the participant joins the meeting **without** logging into Zoom, this returns an empty string value. \n\n This value returns blank for external users.\n\n**Note:** Use the participant_user_id value instead of this value. We will remove this response in a future release."
+		                  },
+		                  "participant_uuid": {
+		                    "type": "string",
+		                    "description": "The participant's UUID for this specific meeting and any breakout rooms created in this meeting. This value is assigned to a participant when they join a meeting, and is only valid for the duration of that meeting."
+		                  },
+		                  "leave_time": {
+		                    "type": "string",
+		                    "format": "date-time",
+		                    "description": "The time when the participant left the meeting."
+		                  },
+		                  "leave_reason": {
+		                    "type": "string",
+		                    "description": "The reason why the participant left the meeting, where $name is the participant's username: \n* $name left the meeting. \n* $name got disconnected from the meeting. \n* Host ended the meeting. \n* Host closed the meeting. \n* Host started a new meeting. \n* Network connection error. \n* Host did not join. \n* Exceeded free meeting minutes limit. \n* Removed by host. \n* Unknown reason. \n* Leave waiting room. \n* Removed by host from waiting room.",
+		                    "x-enum": [
+		                      "$name left the meeting.",
+		                      "$name got disconnected from the meeting.",
+		                      "Host ended the meeting.",
+		                      "Host closed the meeting.",
+		                      "Host started a new meeting.",
+		                      "Network connection error.",
+		                      "Host did not join.",
+		                      "Exceeded free meeting minutes limit.",
+		                      "Removed by host.",
+		                      "Unknown reason.",
+		                      "Leave waiting room.",
+		                      "Removed by host from waiting room."
+		                    ]
+		                  },
+		                  "email": {
+		                    "type": "string",
+		                    "format": "email",
+		                    "description": "The participant's email address. This response only returns if the participant joined the meeting by logging into Zoom. If the participant is **not** part of the host's account, this returns an empty string value, with some exceptions. See [Email address display rules](https://developers.zoom.us/docs/api/rest/using-zoom-apis/#email-address-display-rules) for details."
+		                  },
+		                  "registrant_id": {
+		                    "type": "string",
+		                    "description": "The participant's registrant ID. (A host or a user with administrative permissions can require [registration for Zoom meetings](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0065026))."
+		                  },
+		                  "participant_user_id": {
+		                    "type": "string",
+		                    "description": "The participant's universally unique ID (UUID). \n* If the participant joins the meeting by logging into Zoom, this value is the id value in the [**Get a user**](/api-reference/zoom-api/methods#operation/user) API response. \n* If the participant joins the meeting **without** logging into Zoom, this returns an empty string value.\n\nThis value returns blank for external users."
+		                  },
+		                  "customer_key": {
+		                    "type": "string",
+		                    "description": "The participant's SDK identifier. This value can be alphanumeric."
+		                  },
+		                  "phone_number": {
+		                    "type": "string",
+		                    "description": "Phone number of participant joined via PSTN",
+		                    "example": "8615250064084"
+		                  }
+		                },
+		                "additionalProperties": false
+		              }
+		            },
+		            "additionalProperties": false
+		          }
+		        },
+		        "additionalProperties": false
+		      }
+		    },
+		    "additionalProperties": false
+		  }
+		}
+
+meeting.chat_message_sent
+	Layout
+		{
+		  "event": "…",
+		  "event_ts": 1,
+		  "payload": {
+		    "account_id": "…",
+		    "object": {
+		      "id": 1,
+		      "uuid": "…",
+		      "chat_message": {
+		        "date_time": "2025-02-25T22:01:08.294Z",
+		        "sender_session_id": "…",
+		        "sender_name": "…",
+		        "sender_email": "hello@example.com",
+		        "sender_type": "host",
+		        "recipient_session_id": "…",
+		        "recipient_name": "…",
+		        "recipient_email": "hello@example.com",
+		        "recipient_type": "everyone",
+		        "message_id": "…",
+		        "message_content": "…",
+		        "file_ids": [
+		          "…"
+		        ]
+		      }
+		    }
+		  }
+		}
+	Schema
+		{
+		  "schema": {
+		    "type": "object",
+		    "required": [
+		      "event",
+		      "event_ts",
+		      "payload"
+		    ],
+		    "properties": {
+		      "event": {
+		        "type": "string",
+		        "description": "The name of the event."
+		      },
+		      "event_ts": {
+		        "type": "integer",
+		        "format": "int64",
+		        "description": "A timestamp when the event occurred."
+		      },
+		      "payload": {
+		        "type": "object",
+		        "required": [
+		          "account_id",
+		          "object"
+		        ],
+		        "properties": {
+		          "account_id": {
+		            "type": "string",
+		            "description": "The account ID of the user who created the meeting."
+		          },
+		          "object": {
+		            "type": "object",
+		            "description": "Information about the chat message.",
+		            "required": [
+		              "id",
+		              "uuid",
+		              "chat_message"
+		            ],
+		            "properties": {
+		              "id": {
+		                "type": "integer",
+		                "format": "int64",
+		                "description": "The meeting ID."
+		              },
+		              "uuid": {
+		                "type": "string",
+		                "description": "The meeting's universally unique identifier (UUID). Each meeting instance generates a meeting UUID."
+		              },
+		              "chat_message": {
+		                "type": "object",
+		                "description": "Information about the chat message.",
+		                "required": [
+		                  "date_time",
+		                  "sender_session_id",
+		                  "sender_name",
+		                  "sender_type",
+		                  "recipient_type",
+		                  "message_id",
+		                  "message_content"
+		                ],
+		                "properties": {
+		                  "date_time": {
+		                    "type": "string",
+		                    "format": "date-time",
+		                    "description": "The date and time when the chat message was sent."
+		                  },
+		                  "sender_session_id": {
+		                    "type": "string",
+		                    "description": "The message sender's session ID."
+		                  },
+		                  "sender_name": {
+		                    "type": "string",
+		                    "description": "The message sender's name."
+		                  },
+		                  "sender_email": {
+		                    "type": "string",
+		                    "format": "email",
+		                    "description": "The message sender's email address."
+		                  },
+		                  "sender_type": {
+		                    "type": "string",
+		                    "description": "The type of user that sent the message: \n* host — The meeting host. \n* guest — A meeting guest.",
+		                    "enum": [
+		                      "host",
+		                      "guest"
+		                    ]
+		                  },
+		                  "recipient_session_id": {
+		                    "type": "string",
+		                    "description": "The message recipient's session ID."
+		                  },
+		                  "recipient_name": {
+		                    "type": "string",
+		                    "description": "The message recipient's name."
+		                  },
+		                  "recipient_email": {
+		                    "type": "string",
+		                    "format": "email",
+		                    "description": "The message recipient's email address. Optional only included if it is a private message."
+		                  },
+		                  "recipient_type": {
+		                    "type": "string",
+		                    "description": "The type of message recipient: \n* everyone - All meeting participants. \n* host - The meeting host. \n* guest - A meeting guest. \n* group - A group chat.",
+		                    "enum": [
+		                      "everyone",
+		                      "host",
+		                      "guest",
+		                      "group"
+		                    ]
+		                  },
+		                  "message_id": {
+		                    "type": "string",
+		                    "description": "The chat message's UUID."
+		                  },
+		                  "message_content": {
+		                    "type": "string",
+		                    "description": "The content of the chat message."
+		                  },
+		                  "file_ids": {
+		                    "type": "array",
+		                    "description": "The live webinar chat file's UUID, in base64-encoded format.",
+		                    "items": {
+		                      "type": "string"
+		                    }
+		                  }
+		                },
+		                "additionalProperties": false
+		              }
+		            },
+		            "additionalProperties": false
+		          }
+		        },
+		        "additionalProperties": false
+		      }
+		    },
+		    "additionalProperties": false
+		  }
+		}		
