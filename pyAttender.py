@@ -12,6 +12,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import pathlib
 import asyncio
 import time
+from contextlib import asynccontextmanager
 
 def import_time() -> str:
     return datetime.utcnow().isoformat()
@@ -20,18 +21,19 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-app = FastAPI()
-
-# Set up background tasks for meeting state manager
-@app.on_event("startup")
-async def startup_event():
-    # This will be called when the FastAPI app starts
+# Define lifespan context manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: This will be called when the FastAPI app starts
     asyncio.create_task(meeting_state._schedule_eod_reports())
     
-@app.on_event("shutdown")
-async def shutdown_event():
-    # Any cleanup needed when shutting down
+    yield
+    
+    # Shutdown: Any cleanup needed when shutting down
     pass
+
+# Create FastAPI app with lifespan
+app = FastAPI(lifespan=lifespan)
 
 class ZoomAccountManager:
     def __init__(self):
