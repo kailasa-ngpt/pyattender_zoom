@@ -455,8 +455,9 @@ class MeetingStateManager:
         report_dir = self.reports_dir / date_str
         report_dir.mkdir(parents=True, exist_ok=True)
         
-        # Report filename: "Topic | HourlyReport | meeting_uuid.xlsx"
-        report_filename = f"{topic} | HourlyReport | {meeting_uuid}.xlsx"
+        # Report filename: "Topic_HourlyReport_meeting_uuid.xlsx" (using underscore instead of pipe)
+        safe_topic = ''.join(c for c in topic if c.isalnum() or c in ' _-').strip()
+        report_filename = f"{safe_topic}_HourlyReport_{meeting_uuid}.xlsx"
         report_path = report_dir / report_filename
         
         # Create workbook
@@ -531,8 +532,9 @@ class MeetingStateManager:
         report_dir = self.reports_dir / date_str
         report_dir.mkdir(parents=True, exist_ok=True)
         
-        # Report filename: "Topic | EoD | meeting_uuid.xlsx"
-        report_filename = f"{topic} | EoD | {meeting_uuid}.xlsx"
+        # Report filename: "Topic_EoD_meeting_uuid.xlsx" (using underscore instead of pipe)
+        safe_topic = ''.join(c for c in topic if c.isalnum() or c in ' _-').strip()
+        report_filename = f"{safe_topic}_EoD_{meeting_uuid}.xlsx"
         report_path = report_dir / report_filename
         
         # Create workbook
@@ -621,12 +623,74 @@ async def zoom_webhook(request: Request):
     body = await request.body()
     body_str = body.decode('utf-8')
     
+    # Save raw webhook immediately, before any processing
     try:
         data = json.loads(body_str)
         event_type = data.get("event", "unknown")
         print(f"[{current_time}] Webhook event type: {event_type}")
+        
+        # Extract meeting UUID if available
+        meeting_uuid = None
+        if "payload" in data and "object" in data["payload"]:
+            obj = data["payload"]["object"]
+            if "uuid" in obj:
+                meeting_uuid = obj["uuid"]
+        
+        # If we have a meeting UUID, save to the proper structure immediately
+        if meeting_uuid:
+            now = datetime.now()
+            date_str = now.strftime("%Y-%m-%d")
+            timestamp = now.strftime("%Y-%m-%d_%H-%M-%S-%f")
+            
+            # Create directory structure
+            raw_dir = pathlib.Path("Raw")
+            day_dir = raw_dir / date_str
+            meeting_dir = day_dir / meeting_uuid
+            meeting_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Write webhook data to file immediately
+            file_path = meeting_dir / f"{timestamp}.json"
+            with open(file_path, 'w') as f:
+                json.dump(data, f, indent=2)
+                
+            print(f"[{current_time}] Raw webhook saved to {file_path}")
+        else:
+            # No meeting UUID, save in a general directory
+            now = datetime.now()
+            date_str = now.strftime("%Y-%m-%d")
+            timestamp = now.strftime("%Y-%m-%d_%H-%M-%S-%f")
+            
+            # Create directory structure
+            raw_dir = pathlib.Path("Raw")
+            day_dir = raw_dir / date_str
+            general_dir = day_dir / "general"
+            general_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Write webhook data to file
+            file_path = general_dir / f"{timestamp}_{event_type}.json"
+            with open(file_path, 'w') as f:
+                json.dump(data, f, indent=2)
+                
+            print(f"[{current_time}] Raw webhook (no meeting UUID) saved to {file_path}")
     except json.JSONDecodeError:
         print(f"[{current_time}] Error parsing webhook JSON")
+        
+        # Save invalid JSON to a separate directory
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        timestamp = now.strftime("%Y-%m-%d_%H-%M-%S-%f")
+        
+        raw_dir = pathlib.Path("Raw")
+        day_dir = raw_dir / date_str
+        error_dir = day_dir / "invalid_json"
+        error_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save the raw body that couldn't be parsed
+        file_path = error_dir / f"{timestamp}_invalid.txt"
+        with open(file_path, 'w') as f:
+            f.write(body_str)
+            
+        print(f"[{current_time}] Invalid JSON saved to {file_path}")
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     # Case 1: Endpoint URL Validation
