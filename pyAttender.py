@@ -760,32 +760,53 @@ async def health_check():
 
 @app.post("/reset-token")
 async def reset_token(request: Request):
-    """Reset verification status for a specific token"""
+    """Reset verification status for all tokens"""
     try:
-        data = await request.json()
-        token = data.get("token")
+        # Optional: If body is provided, reset specific token
+        body = await request.body()
+        if body:
+            try:
+                data = json.loads(body)
+                token = data.get("token")
+                
+                if token:
+                    # Check if token exists in our list
+                    if token not in account_manager.tokens:
+                        raise HTTPException(status_code=404, detail="Token not found")
+                        
+                    # Reset the verification status for specific token
+                    account_manager.verified_tokens[token] = False
+                    
+                    # Find the account number for this token
+                    account_number = account_manager.tokens.index(token) + 1
+                    
+                    # Save the updated verification status
+                    account_manager.save_verification_status()
+                    
+                    return {
+                        "status": "success",
+                        "message": f"Verification status reset for account {account_number}",
+                        "account_number": account_number
+                    }
+            except json.JSONDecodeError:
+                # If JSON is invalid, continue to reset all tokens
+                pass
         
-        if not token:
-            raise HTTPException(status_code=400, detail="Token is required")
-            
-        # Check if token exists in our list
-        if token not in account_manager.tokens:
-            raise HTTPException(status_code=404, detail="Token not found")
-            
-        # Reset the verification status
-        account_manager.verified_tokens[token] = False
+        # Reset all tokens
+        for token in account_manager.tokens:
+            account_manager.verified_tokens[token] = False
         
-        # Find the account number for this token
-        account_number = account_manager.tokens.index(token) + 1
+        # Save the updated verification status
+        account_manager.save_verification_status()
         
         return {
             "status": "success",
-            "message": f"Verification status reset for account {account_number}",
-            "account_number": account_number
+            "message": f"Verification status reset for all {len(account_manager.tokens)} accounts",
+            "total_accounts": len(account_manager.tokens)
         }
-        
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error resetting tokens: {str(e)}")
+
 
 @app.get("/meetings")
 async def get_meetings():
