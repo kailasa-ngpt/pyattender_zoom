@@ -455,10 +455,21 @@ class MeetingStateManager:
         report_dir = self.reports_dir / date_str
         report_dir.mkdir(parents=True, exist_ok=True)
         
-        # Report filename: "Topic_HourlyReport_meeting_uuid.xlsx" (using underscore instead of pipe)
+        # Clean topic name - allow only alphanumeric, spaces, and common safe characters
         safe_topic = ''.join(c for c in topic if c.isalnum() or c in ' _-').strip()
-        report_filename = f"{safe_topic}_HourlyReport_{meeting_uuid}.xlsx"
+        safe_topic = safe_topic.replace(' ', '_')
+        
+        # Find a unique filename using counters if needed
+        base_filename = f"{safe_topic}_HourlyReport"
+        counter = 0
+        report_filename = f"{base_filename}.xlsx"
         report_path = report_dir / report_filename
+        
+        # If file exists, add counter until we find a unique name
+        while report_path.exists():
+            counter += 1
+            report_filename = f"{base_filename}_{counter:02d}.xlsx"
+            report_path = report_dir / report_filename
         
         # Create workbook
         wb = openpyxl.Workbook()
@@ -532,10 +543,21 @@ class MeetingStateManager:
         report_dir = self.reports_dir / date_str
         report_dir.mkdir(parents=True, exist_ok=True)
         
-        # Report filename: "Topic_EoD_meeting_uuid.xlsx" (using underscore instead of pipe)
+        # Clean topic name - allow only alphanumeric, spaces, and common safe characters
         safe_topic = ''.join(c for c in topic if c.isalnum() or c in ' _-').strip()
-        report_filename = f"{safe_topic}_EoD_{meeting_uuid}.xlsx"
+        safe_topic = safe_topic.replace(' ', '_')
+        
+        # Find a unique filename using counters if needed
+        base_filename = f"{safe_topic}_EoD"
+        counter = 0
+        report_filename = f"{base_filename}.xlsx"
         report_path = report_dir / report_filename
+        
+        # If file exists, add counter until we find a unique name
+        while report_path.exists():
+            counter += 1
+            report_filename = f"{base_filename}_{counter:02d}.xlsx"
+            report_path = report_dir / report_filename
         
         # Create workbook
         wb = openpyxl.Workbook()
