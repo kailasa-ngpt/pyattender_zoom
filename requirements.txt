@@ -1,0 +1,4 @@
+install
+fastapi
+pendulum
+openpyxl
