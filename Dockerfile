@@ -2,17 +2,14 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install uv package manager
-RUN pip install uv
-
-# Copy requirements and install dependencies
+# Install dependencies
 COPY requirements.txt .
 COPY pyproject.toml .
-RUN uv pip install --system -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY *.py .
-COPY .env* .
+COPY .env* ./
 
 # Create directories for data persistence
 RUN mkdir -p Raw
