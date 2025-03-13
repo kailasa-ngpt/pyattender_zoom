@@ -72,7 +72,7 @@ class AttendanceProcessor:
         if config.USE_AI_MATCHING:
             try:
                 self.model = genai.GenerativeModel(
-                    model_name="gemini-2.0-pro",
+                    model_name="gemini-2.0-flash-001",
                     system_instruction="""
                     You are an attendance matching assistant. Your job is to match participant names from
                     Zoom meetings with their official names in a roster database.
