@@ -87,7 +87,102 @@ class AttendanceProcessor:
                 print(f"Failed to initialize Gemini AI model: {str(e)}")
                 config.USE_AI_MATCHING = False
 
-200, 201]:
+    async def get_roster(self, force_refresh=False):
+        """Fetch the roster from NocoDB, with caching."""
+        current_time = datetime.datetime.now()
+
+        # Check if cache is valid
+        if (not force_refresh and
+            self.roster_last_updated and
+            (current_time - self.roster_last_updated).seconds < self.cache_lifetime and
+            self.roster_cache):
+            return self.roster_cache
+
+        # Fetch from API if cache is invalid
+        headers = {"xc-token": config.NOCODB_TOKEN}
+        all_roster = []
+        page = 1
+        limit = 100  # Adjust based on your data size
+
+        # Handle pagination
+        while True:
+            response = requests.get(
+                f"{config.NOCODB_URL}/api/v2/tables/{config.ROSTER_TABLE_ID}/records",
+                params={"limit": limit, "offset": (page - 1) * limit},
+                headers=headers
+            )
+
+            if response.status_code != 200:
+                raise HTTPException(status_code=500, detail=f"Failed to get roster: {response.text}")
+
+            data = response.json()
+            all_roster.extend(data.get("list", []))
+
+            # Check if we need to fetch more pages
+            page_info = data.get("PageInfo", {})
+            if page_info.get("isLastPage", True):
+                break
+
+            page += 1
+
+        # Update cache
+        self.roster_cache = all_roster
+        self.roster_last_updated = current_time
+
+        return all_roster
+
+    async def mark_attendance(self, person_id, attendance_date):
+        """Mark attendance for a person in the attendance table."""
+        headers = {
+            "xc-token": config.NOCODB_TOKEN,
+            "Content-Type": "application/json"
+        }
+
+        # Format date column name (YYYY_MM_DD)
+        date_column = attendance_date.replace("-", "_")
+
+        payload = {
+            "Id": str(person_id),
+            f"{date_column}": "Yes"
+        }
+
+        response = requests.patch(
+            f"{config.NOCODB_URL}/api/v2/tables/{config.ATTENDANCE_TABLE_ID}/records",
+            json=payload,
+            headers=headers
+        )
+
+        if response.status_code not in [200, 201]:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to mark attendance: {response.text}"
+            )
+
+        return response.json()
+
+    async def log_unidentified_participant(self, name, join_time, date):
+        """Log unidentified participants to the unidentified table."""
+        headers = {
+            "xc-token": config.NOCODB_TOKEN,
+            "Content-Type": "application/json"
+        }
+
+        # Format time for better readability
+        join_time_formatted = datetime.datetime.fromisoformat(join_time.replace('Z', '+00:00')).strftime("%H:%M")
+
+        payload = {
+            "Date": date,
+            "joinedTime": join_time_formatted,
+            "nameJoinedWith": name
+        }
+
+        response = requests.post(
+            f"{config.NOCODB_URL}/api/v2/tables/{config.UNIDENTIFIED_TABLE_ID}/records",
+            json=payload,
+            headers=headers
+        )
+
+        if response.status_code not in [200, 201]:
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to log unidentified participant: {response.text}"
@@ -99,6 +194,9 @@ class AttendanceProcessor:
         """
         Use Gemini AI to match participant names with the roster.
         Returns the matched person ID and confidence score.
+
+        This simplified version doesn't use function calling but instead
+        relies on structured JSON output in the response.
         """
         # Extract relevant roster information for matching
         roster_info = []
@@ -111,33 +209,6 @@ class AttendanceProcessor:
                 "fullName": f"{person.get('firstName', '')} {person.get('lastName', '')}".strip()
             }
             roster_info.append(person_info)
-
-        # Prepare function definition for structured output
-        match_schema = {
-            "type": "object",
-            "properties": {
-                "matchedPersonId": {
-                    "type": "integer",
-                    "description": "The ID of the matched person from the roster, or null if no match found"
-                },
-                "confidence": {
-                    "type": "number",
-                    "description": "Confidence score of the match from 0 to 1"
-                },
-                "reasoning": {
-                    "type": "string",
-                    "description": "Explanation of the matching decision"
-                }
-            },
-            "required": ["matchedPersonId", "confidence", "reasoning"]
-        }
-
-        # Define function for finding match
-        find_match_function = {
-            "name": "find_roster_match",
-            "description": "Find the best match for a participant name in the roster",
-            "parameters": match_schema
-        }
 
         # Create the prompt for Gemini
         prompt = f"""
@@ -155,7 +226,28 @@ class AttendanceProcessor:
         4. The participant name might have typos or spelling variations
         5. The participant might join with a completely different name (family member's device, etc.)
 
-        If the confidence is below 0.6, report no match found (null ID).
+        If the confidence is below 0.6, report no match found.
+
+        Provide your answer in this JSON format (and only this format, no explanations outside the JSON):
+        {{
+            "matchedPersonId": ID_number_or_null,
+            "confidence": confidence_score_between_0_and_1,
+            "reasoning": "brief explanation of your matching decision"
+        }}
+
+        Example:
+        {{
+            "matchedPersonId": 42,
+            "confidence": 0.85,
+            "reasoning": "The participant name 'John S.' is likely a shortened version of 'John Smith' (ID 42)"
+        }}
+
+        Or for no match:
+        {{
+            "matchedPersonId": null,
+            "confidence": 0.3,
+            "reasoning": "No convincing match found for 'XYZ User'"
+        }}
         """
 
         try:
@@ -166,50 +258,46 @@ class AttendanceProcessor:
                     "top_p": 0.95,
                     "top_k": 40,
                     "max_output_tokens": 2048,
+                    "response_mime_type": "application/json",
                 },
-                tools=[find_match_function]
             )
 
-            # Log the raw response for debugging
-            print(f"Gemini response: {response}")
+            # Get the text response
+            text_response = response.text
 
-            # Extract the function call result - more robust extraction handling different response structures
+            # Try to parse JSON from the response
             try:
-                if hasattr(response, 'candidates') and response.candidates:
-                    # Navigate the response structure carefully
-                    candidate = response.candidates[0]
-                    if hasattr(candidate, 'content') and candidate.content:
-                        content = candidate.content
+                # Strip any potential markdown code block syntax
+                cleaned_text = text_response.replace("```json", "").replace("```", "").strip()
+                match_data = json.loads(cleaned_text)
 
-                        # Try to extract function call data
-                        if hasattr(content, 'parts') and content.parts:
-                            for part in content.parts:
-                                if hasattr(part, 'function_call') and part.function_call:
-                                    if hasattr(part.function_call, 'args'):
-                                        return part.function_call.args
+                # Validate the expected fields
+                if isinstance(match_data, dict) and "matchedPersonId" in match_data:
+                    return match_data
+                else:
+                    raise ValueError("Invalid response format")
 
-                # If we got here, try to parse from text
-                text_response = response.text
-                if text_response:
-                    # Try to extract JSON from the text response
-                    import re
-                    json_match = re.search(r'\{.*\}', text_response, re.DOTALL)
-                    if json_match:
-                        try:
-                            match_data = json.loads(json_match.group(0))
-                            if isinstance(match_data, dict) and 'matchedPersonId' in match_data:
-                                return match_data
-                        except json.JSONDecodeError:
-                            pass
-            except Exception as e:
-                print(f"Error extracting function results: {str(e)}")
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse JSON from response: {e}")
+                print(f"Response text: {text_response}")
 
-            # Fallback if structured output isn't available
-            return {
-                "matchedPersonId": None,
-                "confidence": 0,
-                "reasoning": "Failed to get structured output from AI model."
-            }
+                # Try to extract JSON with regex as fallback
+                import re
+                json_match = re.search(r'\{.*\}', text_response, re.DOTALL)
+                if json_match:
+                    try:
+                        match_data = json.loads(json_match.group(0))
+                        if isinstance(match_data, dict) and "matchedPersonId" in match_data:
+                            return match_data
+                    except json.JSONDecodeError:
+                        pass
+
+                # Return a default response if parsing fails
+                return {
+                    "matchedPersonId": None,
+                    "confidence": 0,
+                    "reasoning": f"Failed to parse response: {str(e)}"
+                }
 
         except Exception as e:
             print(f"Error in AI matching: {str(e)}")
@@ -521,15 +609,33 @@ async def test_matching(request: Request):
         raise HTTPException(status_code=400, detail="Name is required")
 
     roster = await attendance_processor.get_roster()
-    match_result = await attendance_processor.match_participant_with_roster(name, roster)
 
-    # If we have a match, include the person's details
-    if match_result.get("matchedPersonId"):
-        person_id = match_result["matchedPersonId"]
+    results = {}
+
+    # Try AI matching if enabled
+    if config.USE_AI_MATCHING:
+        try:
+            ai_match = await attendance_processor.match_participant_with_roster(name, roster)
+            results["ai_match"] = ai_match
+        except Exception as e:
+            results["ai_match_error"] = str(e)
+
+    # Always include simple matching for comparison
+    simple_match = attendance_processor.simple_name_matching(name, roster)
+    results["simple_match"] = simple_match
+
+    # Include person details if we have a match from either method
+    person_id = None
+    if config.USE_AI_MATCHING and "ai_match" in results and results["ai_match"].get("matchedPersonId"):
+        person_id = results["ai_match"]["matchedPersonId"]
+    elif results["simple_match"].get("matchedPersonId"):
+        person_id = results["simple_match"]["matchedPersonId"]
+
+    if person_id:
         person_details = next((p for p in roster if p.get("Id") == person_id), None)
-        match_result["personDetails"] = person_details
+        results["person_details"] = person_details
 
-    return match_result
+    return results
 
 if __name__ == "__main__":
     import uvicorn
