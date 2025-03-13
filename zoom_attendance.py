@@ -5,7 +5,7 @@ import datetime
 import hmac
 import hashlib
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException
 from typing import Dict, List, Any, Optional, Set
 import google.generativeai as genai
 import asyncio
@@ -16,136 +16,78 @@ load_dotenv()
 # Initialize FastAPI app
 app = FastAPI()
 
-# Configure Gemini
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-genai.configure(api_key=GOOGLE_API_KEY)
+# App configuration
+class Config:
+    # NocoDB Configuration
+    NOCODB_URL = os.getenv("NOCODB_URL", "https://km.koogle.sk")
+    NOCODB_TOKEN = os.getenv("NOCODB_TOKEN")
+    ROSTER_TABLE_ID = os.getenv("ROSTER_TABLE_ID", "m1848aw7em1uz9g")
+    ATTENDANCE_TABLE_ID = os.getenv("ATTENDANCE_TABLE_ID", "mbur916jgs0m7ua")
+    UNIDENTIFIED_TABLE_ID = os.getenv("UNIDENTIFIED_TABLE_ID", "mhsf4s0jhp90gnn")
 
-# NocoDB Configuration
-NOCODB_URL = os.getenv("NOCODB_URL", "https://km.koogle.sk")
-NOCODB_TOKEN = os.getenv("NOCODB_TOKEN")
-ROSTER_TABLE_ID = "m1848aw7em1uz9g"
-ATTENDANCE_TABLE_ID = "mbur916jgs0m7ua"
-UNIDENTIFIED_TABLE_ID = "mhsf4s0jhp90gnn"
+    # Zoom webhook verification
+    ZOOM_WEBHOOK_SECRET = os.getenv("ZOOM_WEBHOOK_SECRET")
 
-# Zoom webhook verification
-ZOOM_WEBHOOK_SECRET = os.getenv("ZOOM_WEBHOOK_SECRET")
+    # AI Configuration
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    USE_AI_MATCHING = os.getenv("USE_AI_MATCHING", "true").lower() == "true"
+    CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.6"))
+
+    # Debugging
+    DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
+
+    # Cache settings
+    ROSTER_CACHE_SECONDS = int(os.getenv("ROSTER_CACHE_SECONDS", "600"))
+
+    def __str__(self):
+        """Return a string representation of the config (excluding sensitive values)"""
+        return {
+            "NOCODB_URL": self.NOCODB_URL,
+            "ROSTER_TABLE_ID": self.ROSTER_TABLE_ID,
+            "ATTENDANCE_TABLE_ID": self.ATTENDANCE_TABLE_ID,
+            "UNIDENTIFIED_TABLE_ID": self.UNIDENTIFIED_TABLE_ID,
+            "USE_AI_MATCHING": self.USE_AI_MATCHING,
+            "CONFIDENCE_THRESHOLD": self.CONFIDENCE_THRESHOLD,
+            "DEBUG_MODE": self.DEBUG_MODE,
+            "ROSTER_CACHE_SECONDS": self.ROSTER_CACHE_SECONDS
+        }.__str__()
+
+# Create config instance
+config = Config()
+
+# Configure Gemini if API key is available
+if config.GOOGLE_API_KEY:
+    genai.configure(api_key=config.GOOGLE_API_KEY)
+else:
+    print("WARNING: No Google API key provided. AI matching will be disabled.")
+    config.USE_AI_MATCHING = False
 
 class AttendanceProcessor:
     def __init__(self):
         self.roster_cache = []
         self.roster_last_updated = None
-        # Cache lifetime in seconds (10 minutes)
-        self.cache_lifetime = 600
+        self.cache_lifetime = config.ROSTER_CACHE_SECONDS
 
-        # Initialize Gemini model
-        self.model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash-001",
-            system_instruction="""
-            You are an attendance matching assistant. Your job is to match participant names from
-            Zoom meetings with their official names in a roster database.
-            - Consider common variations, nicknames, and misspellings.
-            - Consider partial names (first name only, last name only).
-            - Consider spiritual names if available.
-            - Return the best match with confidence score.
-            """
-        )
+        # Initialize Gemini model if AI matching is enabled
+        if config.USE_AI_MATCHING:
+            try:
+                self.model = genai.GenerativeModel(
+                    model_name="gemini-2.0-pro",
+                    system_instruction="""
+                    You are an attendance matching assistant. Your job is to match participant names from
+                    Zoom meetings with their official names in a roster database.
+                    - Consider common variations, nicknames, and misspellings.
+                    - Consider partial names (first name only, last name only).
+                    - Consider spiritual names if available.
+                    - Return the best match with confidence score.
+                    """
+                )
+                print("Successfully initialized Gemini AI model")
+            except Exception as e:
+                print(f"Failed to initialize Gemini AI model: {str(e)}")
+                config.USE_AI_MATCHING = False
 
-    async def get_roster(self, force_refresh=False):
-        """Fetch the roster from NocoDB, with caching."""
-        current_time = datetime.datetime.now()
-
-        # Check if cache is valid
-        if (not force_refresh and
-            self.roster_last_updated and
-            (current_time - self.roster_last_updated).seconds < self.cache_lifetime and
-            self.roster_cache):
-            return self.roster_cache
-
-        # Fetch from API if cache is invalid
-        headers = {"xc-token": NOCODB_TOKEN}
-        all_roster = []
-        page = 1
-        limit = 100  # Adjust based on your data size
-
-        # Handle pagination
-        while True:
-            response = requests.get(
-                f"{NOCODB_URL}/api/v2/tables/{ROSTER_TABLE_ID}/records",
-                params={"limit": limit, "offset": (page - 1) * limit},
-                headers=headers
-            )
-
-            if response.status_code != 200:
-                raise HTTPException(status_code=500, detail=f"Failed to get roster: {response.text}")
-
-            data = response.json()
-            all_roster.extend(data.get("list", []))
-
-            # Check if we need to fetch more pages
-            page_info = data.get("PageInfo", {})
-            if page_info.get("isLastPage", True):
-                break
-
-            page += 1
-
-        # Update cache
-        self.roster_cache = all_roster
-        self.roster_last_updated = current_time
-
-        return all_roster
-
-    async def mark_attendance(self, person_id, attendance_date):
-        """Mark attendance for a person in the attendance table."""
-        headers = {
-            "xc-token": NOCODB_TOKEN,
-            "Content-Type": "application/json"
-        }
-
-        # Format date column name (YYYY_MM_DD)
-        date_column = attendance_date.replace("-", "_")
-
-        payload = {
-            "Id": str(person_id),
-            f"{date_column}": "Yes"
-        }
-
-        response = requests.patch(
-            f"{NOCODB_URL}/api/v2/tables/{ATTENDANCE_TABLE_ID}/records",
-            json=payload,
-            headers=headers
-        )
-
-        if response.status_code not in [200, 201]:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to mark attendance: {response.text}"
-            )
-
-        return response.json()
-
-    async def log_unidentified_participant(self, name, join_time, date):
-        """Log unidentified participants to the unidentified table."""
-        headers = {
-            "xc-token": NOCODB_TOKEN,
-            "Content-Type": "application/json"
-        }
-
-        # Format time for better readability
-        join_time_formatted = datetime.datetime.fromisoformat(join_time.replace('Z', '+00:00')).strftime("%H:%M")
-
-        payload = {
-            "Date": date,
-            "joinedTime": join_time_formatted,
-            "nameJoinedWith": name
-        }
-
-        response = requests.post(
-            f"{NOCODB_URL}/api/v2/tables/{UNIDENTIFIED_TABLE_ID}/records",
-            json=payload,
-            headers=headers
-        )
-
-        if response.status_code not in [200, 201]:
+200, 201]:
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to log unidentified participant: {response.text}"
@@ -228,12 +170,39 @@ class AttendanceProcessor:
                 tools=[find_match_function]
             )
 
-            # Extract the function call result
-            if hasattr(response, 'candidates') and response.candidates:
-                function_calls = response.candidates[0].content.parts[0].function_call
-                if function_calls:
-                    match_result = function_calls.args
-                    return match_result
+            # Log the raw response for debugging
+            print(f"Gemini response: {response}")
+
+            # Extract the function call result - more robust extraction handling different response structures
+            try:
+                if hasattr(response, 'candidates') and response.candidates:
+                    # Navigate the response structure carefully
+                    candidate = response.candidates[0]
+                    if hasattr(candidate, 'content') and candidate.content:
+                        content = candidate.content
+
+                        # Try to extract function call data
+                        if hasattr(content, 'parts') and content.parts:
+                            for part in content.parts:
+                                if hasattr(part, 'function_call') and part.function_call:
+                                    if hasattr(part.function_call, 'args'):
+                                        return part.function_call.args
+
+                # If we got here, try to parse from text
+                text_response = response.text
+                if text_response:
+                    # Try to extract JSON from the text response
+                    import re
+                    json_match = re.search(r'\{.*\}', text_response, re.DOTALL)
+                    if json_match:
+                        try:
+                            match_data = json.loads(json_match.group(0))
+                            if isinstance(match_data, dict) and 'matchedPersonId' in match_data:
+                                return match_data
+                        except json.JSONDecodeError:
+                            pass
+            except Exception as e:
+                print(f"Error extracting function results: {str(e)}")
 
             # Fallback if structured output isn't available
             return {
@@ -249,6 +218,73 @@ class AttendanceProcessor:
                 "confidence": 0,
                 "reasoning": f"Error in AI processing: {str(e)}"
             }
+
+    def simple_name_matching(self, participant_name, roster):
+        """
+        A simple fallback name matching algorithm that doesn't rely on AI.
+        Returns the matched person ID and confidence score.
+        """
+        participant_name = participant_name.lower()
+        best_match = None
+        best_score = 0
+        reasoning = ""
+
+        for person in roster:
+            person_id = person.get("Id")
+            first_name = person.get("firstName", "").lower()
+            last_name = person.get("lastName", "").lower()
+            spiritual_name = person.get("spiritualName", "").lower() if person.get("spiritualName") else ""
+            full_name = f"{first_name} {last_name}".strip()
+
+            # Check exact matches first (high confidence)
+            if participant_name == full_name:
+                return {"matchedPersonId": person_id, "confidence": 0.95, "reasoning": "Exact full name match"}
+
+            if spiritual_name and participant_name == spiritual_name:
+                return {"matchedPersonId": person_id, "confidence": 0.9, "reasoning": "Exact spiritual name match"}
+
+            if participant_name == first_name:
+                return {"matchedPersonId": person_id, "confidence": 0.85, "reasoning": "Exact first name match"}
+
+            if participant_name == last_name:
+                return {"matchedPersonId": person_id, "confidence": 0.8, "reasoning": "Exact last name match"}
+
+            # Check if participant name is contained within any name fields
+            if spiritual_name and participant_name in spiritual_name:
+                score = 0.75
+                if score > best_score:
+                    best_score = score
+                    best_match = person_id
+                    reasoning = "Partial spiritual name match"
+
+            if participant_name in full_name:
+                score = 0.7
+                if score > best_score:
+                    best_score = score
+                    best_match = person_id
+                    reasoning = "Partial full name match"
+
+            if first_name in participant_name or last_name in participant_name:
+                score = 0.65
+                if score > best_score:
+                    best_score = score
+                    best_match = person_id
+                    reasoning = "Name contained in participant name"
+
+            # Check if any part of participant name is in any name fields
+            name_parts = participant_name.split()
+            for part in name_parts:
+                if part in first_name or part in last_name or (spiritual_name and part in spiritual_name):
+                    score = 0.6
+                    if score > best_score:
+                        best_score = score
+                        best_match = person_id
+                        reasoning = f"Partial match on name component: {part}"
+
+        if best_match and best_score >= 0.6:
+            return {"matchedPersonId": best_match, "confidence": best_score, "reasoning": reasoning}
+        else:
+            return {"matchedPersonId": None, "confidence": best_score, "reasoning": "No confident match found"}
 
     async def process_participant_joined(self, webhook_data):
         """Process participant joined event and handle attendance marking."""
@@ -271,17 +307,43 @@ class AttendanceProcessor:
         # Get roster list
         roster = await self.get_roster()
 
-        # Use Gemini to match participant with roster
-        match_result = await self.match_participant_with_roster(participant_name, roster)
+        # Try Gemini AI first if enabled
+        if config.USE_AI_MATCHING:
+            try:
+                match_result = await self.match_participant_with_roster(participant_name, roster)
 
-        person_id = match_result.get("matchedPersonId")
-        confidence = match_result.get("confidence", 0)
-        reasoning = match_result.get("reasoning", "")
+                # Check if we got a valid result from Gemini
+                if "matchedPersonId" in match_result:
+                    person_id = match_result.get("matchedPersonId")
+                    confidence = match_result.get("confidence", 0)
+                    reasoning = match_result.get("reasoning", "")
 
-        # Log the matching attempt
-        print(f"Matching '{participant_name}': ID={person_id}, Confidence={confidence}, Reason={reasoning}")
+                    # Log the AI matching attempt
+                    print(f"AI Matching '{participant_name}': ID={person_id}, Confidence={confidence}")
+                else:
+                    # If Gemini didn't return a valid structure, use fallback
+                    raise ValueError("Invalid AI matching result structure")
+            except Exception as e:
+                # Log the error and fall back to simple matching
+                print(f"AI matching failed, using fallback: {str(e)}")
+                match_result = self.simple_name_matching(participant_name, roster)
+                person_id = match_result.get("matchedPersonId")
+                confidence = match_result.get("confidence", 0)
+                reasoning = match_result.get("reasoning", "") + " (via fallback matching)"
 
-        if person_id and confidence >= 0.6:
+                # Log the fallback matching attempt
+                print(f"Fallback matching '{participant_name}': ID={person_id}, Confidence={confidence}, Reason={reasoning}")
+        else:
+            # AI matching is disabled, use simple matching directly
+            match_result = self.simple_name_matching(participant_name, roster)
+            person_id = match_result.get("matchedPersonId")
+            confidence = match_result.get("confidence", 0)
+            reasoning = match_result.get("reasoning", "")
+
+            # Log the matching attempt
+            print(f"Simple matching '{participant_name}': ID={person_id}, Confidence={confidence}, Reason={reasoning}")
+
+        if person_id and confidence >= config.CONFIDENCE_THRESHOLD:
             # Found a match with good confidence - mark attendance
             try:
                 attendance_result = await self.mark_attendance(person_id, today_date)
@@ -323,7 +385,7 @@ attendance_processor = AttendanceProcessor()
 
 def verify_zoom_signature(signature: str, timestamp: str, request_body: bytes) -> bool:
     """Verify Zoom webhook signature."""
-    if not ZOOM_WEBHOOK_SECRET:
+    if not config.ZOOM_WEBHOOK_SECRET:
         # Skip verification if secret is not set (for testing)
         return True
 
@@ -335,7 +397,7 @@ def verify_zoom_signature(signature: str, timestamp: str, request_body: bytes) -
 
     # Generate HMAC SHA-256 hash
     expected_signature = hmac.new(
-        ZOOM_WEBHOOK_SECRET.encode('utf-8'),
+        config.ZOOM_WEBHOOK_SECRET.encode('utf-8'),
         message.encode('utf-8'),
         hashlib.sha256
     ).hexdigest()
@@ -377,6 +439,66 @@ async def zoom_webhook(request: Request):
 async def test_endpoint():
     """Simple health check endpoint."""
     return {"status": "ok"}
+
+@app.get("/debug")
+async def debug_info():
+    """Get debug information about the current setup."""
+    if not config.DEBUG_MODE:
+        return {"status": "Debug mode disabled. Enable by setting DEBUG_MODE=true in .env"}
+
+    try:
+        # Get roster size
+        roster_count = 0
+        try:
+            roster = await attendance_processor.get_roster(force_refresh=True)
+            roster_count = len(roster)
+        except Exception as e:
+            roster_error = str(e)
+
+        # Test NocoDB connection
+        nocodb_status = "Unknown"
+        try:
+            headers = {"xc-token": config.NOCODB_TOKEN}
+            response = requests.get(
+                f"{config.NOCODB_URL}/api/v2/tables/{config.ROSTER_TABLE_ID}/records",
+                params={"limit": 1},
+                headers=headers
+            )
+            nocodb_status = f"OK - Status {response.status_code}"
+        except Exception as e:
+            nocodb_status = f"Error: {str(e)}"
+
+        # Test AI model if enabled
+        ai_status = "Disabled"
+        if config.USE_AI_MATCHING:
+            try:
+                # Simple test of the AI model
+                response = attendance_processor.model.generate_content("Hello, are you working?")
+                ai_status = f"OK - Response: {response.text[:50]}..."
+            except Exception as e:
+                ai_status = f"Error: {str(e)}"
+
+        return {
+            "status": "ok",
+            "config": {
+                "NOCODB_URL": config.NOCODB_URL,
+                "ROSTER_TABLE_ID": config.ROSTER_TABLE_ID,
+                "ATTENDANCE_TABLE_ID": config.ATTENDANCE_TABLE_ID,
+                "UNIDENTIFIED_TABLE_ID": config.UNIDENTIFIED_TABLE_ID,
+                "USE_AI_MATCHING": config.USE_AI_MATCHING,
+                "CONFIDENCE_THRESHOLD": config.CONFIDENCE_THRESHOLD,
+                "DEBUG_MODE": config.DEBUG_MODE,
+                "ROSTER_CACHE_SECONDS": config.ROSTER_CACHE_SECONDS
+            },
+            "status_checks": {
+                "nocodb_connection": nocodb_status,
+                "roster_count": roster_count,
+                "ai_status": ai_status,
+                "roster_cache_age": f"{(datetime.datetime.now() - (attendance_processor.roster_last_updated or datetime.datetime.now())).seconds} seconds" if attendance_processor.roster_last_updated else "Not cached yet"
+            }
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Error generating debug info: {str(e)}"}
 
 @app.get("/roster")
 async def get_roster():
