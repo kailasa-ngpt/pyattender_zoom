@@ -1,625 +1,413 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
+import os
+import json
+import requests
+import datetime
 import hmac
 import hashlib
-import json
-from typing import Dict, List, Any, Optional, Set
-import os
-from datetime import datetime, timedelta
-import pendulum
-import pathlib
-import asyncio
-import time
-from contextlib import asynccontextmanager
-
-def import_time() -> str:
-    return datetime.utcnow().isoformat()
 from dotenv import load_dotenv
+from fastapi import FastAPI, Request, HTTPException, Depends
+from typing import Dict, List, Any, Optional, Set
+import google.generativeai as genai
+import asyncio
 
 # Load environment variables
 load_dotenv()
 
-# Define lifespan context manager
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup: This will be called when the FastAPI app starts
-    # We've removed the hourly reports scheduling task
-    yield
+# Initialize FastAPI app
+app = FastAPI()
 
-    # Shutdown: Any cleanup needed when shutting down
-    pass
+# Configure Gemini
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+genai.configure(api_key=GOOGLE_API_KEY)
 
-# Create FastAPI app with lifespan
-app = FastAPI(lifespan=lifespan)
+# NocoDB Configuration
+NOCODB_URL = os.getenv("NOCODB_URL", "https://km.koogle.sk")
+NOCODB_TOKEN = os.getenv("NOCODB_TOKEN")
+ROSTER_TABLE_ID = "m1848aw7em1uz9g"
+ATTENDANCE_TABLE_ID = "mbur916jgs0m7ua"
+UNIDENTIFIED_TABLE_ID = "mhsf4s0jhp90gnn"
 
-class ZoomAccountManager:
+# Zoom webhook verification
+ZOOM_WEBHOOK_SECRET = os.getenv("ZOOM_WEBHOOK_SECRET")
+
+class AttendanceProcessor:
     def __init__(self):
-        self.tokens: List[str] = []
-        self.verified_tokens: Dict[str, bool] = {}
-        self.load_tokens_from_env()
+        self.roster_cache = []
+        self.roster_last_updated = None
+        # Cache lifetime in seconds (10 minutes)
+        self.cache_lifetime = 600
 
-    def load_tokens_from_env(self):
-        """Load webhook secret tokens and their verification status from environment variables"""
-        i = 1
+        # Initialize Gemini model
+        self.model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash-001",
+            system_instruction="""
+            You are an attendance matching assistant. Your job is to match participant names from
+            Zoom meetings with their official names in a roster database.
+            - Consider common variations, nicknames, and misspellings.
+            - Consider partial names (first name only, last name only).
+            - Consider spiritual names if available.
+            - Return the best match with confidence score.
+            """
+        )
+
+    async def get_roster(self, force_refresh=False):
+        """Fetch the roster from NocoDB, with caching."""
+        current_time = datetime.datetime.now()
+
+        # Check if cache is valid
+        if (not force_refresh and
+            self.roster_last_updated and
+            (current_time - self.roster_last_updated).seconds < self.cache_lifetime and
+            self.roster_cache):
+            return self.roster_cache
+
+        # Fetch from API if cache is invalid
+        headers = {"xc-token": NOCODB_TOKEN}
+        all_roster = []
+        page = 1
+        limit = 100  # Adjust based on your data size
+
+        # Handle pagination
         while True:
-            token_entry = os.getenv(f'ZOOM_WEBHOOK_SECRET_{i}')
-            if token_entry is None:
+            response = requests.get(
+                f"{NOCODB_URL}/api/v2/tables/{ROSTER_TABLE_ID}/records",
+                params={"limit": limit, "offset": (page - 1) * limit},
+                headers=headers
+            )
+
+            if response.status_code != 200:
+                raise HTTPException(status_code=500, detail=f"Failed to get roster: {response.text}")
+
+            data = response.json()
+            all_roster.extend(data.get("list", []))
+
+            # Check if we need to fetch more pages
+            page_info = data.get("PageInfo", {})
+            if page_info.get("isLastPage", True):
                 break
 
-            # Check if token has a verification state attached with '|' separator
-            if '|' in token_entry:
-                token, verified_str = token_entry.split('|', 1)
-                verified = verified_str.lower() == 'true'
-            else:
-                token = token_entry
-                verified = False
+            page += 1
 
-            self.tokens.append(token)
-            self.verified_tokens[token] = verified
-            i += 1
+        # Update cache
+        self.roster_cache = all_roster
+        self.roster_last_updated = current_time
 
-        if not self.tokens:
-            raise ValueError("No Zoom webhook secret tokens found in environment variables")
+        return all_roster
 
-        # Log current verification status
-        verified_count = sum(1 for v in self.verified_tokens.values() if v)
-        print(f"Loaded {len(self.tokens)} tokens, {verified_count} already verified")
+    async def mark_attendance(self, person_id, attendance_date):
+        """Mark attendance for a person in the attendance table."""
+        headers = {
+            "xc-token": NOCODB_TOKEN,
+            "Content-Type": "application/json"
+        }
 
-    def save_verification_status(self):
-        """Save verification status to .env file"""
+        # Format date column name (YYYY_MM_DD)
+        date_column = attendance_date.replace("-", "_")
+
+        payload = {
+            "Id": str(person_id),
+            f"{date_column}": "Yes"
+        }
+
+        response = requests.patch(
+            f"{NOCODB_URL}/api/v2/tables/{ATTENDANCE_TABLE_ID}/records",
+            json=payload,
+            headers=headers
+        )
+
+        if response.status_code not in [200, 201]:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to mark attendance: {response.text}"
+            )
+
+        return response.json()
+
+    async def log_unidentified_participant(self, name, join_time, date):
+        """Log unidentified participants to the unidentified table."""
+        headers = {
+            "xc-token": NOCODB_TOKEN,
+            "Content-Type": "application/json"
+        }
+
+        # Format time for better readability
+        join_time_formatted = datetime.datetime.fromisoformat(join_time.replace('Z', '+00:00')).strftime("%H:%M")
+
+        payload = {
+            "Date": date,
+            "joinedTime": join_time_formatted,
+            "nameJoinedWith": name
+        }
+
+        response = requests.post(
+            f"{NOCODB_URL}/api/v2/tables/{UNIDENTIFIED_TABLE_ID}/records",
+            json=payload,
+            headers=headers
+        )
+
+        if response.status_code not in [200, 201]:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to log unidentified participant: {response.text}"
+            )
+
+        return response.json()
+
+    async def match_participant_with_roster(self, participant_name, roster):
+        """
+        Use Gemini AI to match participant names with the roster.
+        Returns the matched person ID and confidence score.
+        """
+        # Extract relevant roster information for matching
+        roster_info = []
+        for person in roster:
+            person_info = {
+                "Id": person.get("Id"),
+                "firstName": person.get("firstName", ""),
+                "lastName": person.get("lastName", ""),
+                "spiritualName": person.get("spiritualName"),
+                "fullName": f"{person.get('firstName', '')} {person.get('lastName', '')}".strip()
+            }
+            roster_info.append(person_info)
+
+        # Prepare function definition for structured output
+        match_schema = {
+            "type": "object",
+            "properties": {
+                "matchedPersonId": {
+                    "type": "integer",
+                    "description": "The ID of the matched person from the roster, or null if no match found"
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "Confidence score of the match from 0 to 1"
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": "Explanation of the matching decision"
+                }
+            },
+            "required": ["matchedPersonId", "confidence", "reasoning"]
+        }
+
+        # Define function for finding match
+        find_match_function = {
+            "name": "find_roster_match",
+            "description": "Find the best match for a participant name in the roster",
+            "parameters": match_schema
+        }
+
+        # Create the prompt for Gemini
+        prompt = f"""
+        I need to match a Zoom participant with their entry in our roster database.
+
+        Zoom participant name: "{participant_name}"
+
+        Roster database (showing ID, firstName, lastName, and spiritualName if available):
+        {json.dumps(roster_info, indent=2)}
+
+        Find the best match for the participant, considering:
+        1. The participant might use only their first name or last name
+        2. The participant might use a nickname or variation of their name
+        3. The participant might use their spiritual name instead
+        4. The participant name might have typos or spelling variations
+        5. The participant might join with a completely different name (family member's device, etc.)
+
+        If the confidence is below 0.6, report no match found (null ID).
+        """
+
         try:
-            # Read existing .env file
-            env_path = os.path.join(os.getcwd(), '.env')
-            if not os.path.exists(env_path):
-                print("Warning: .env file not found, cannot save verification status")
-                return
+            response = self.model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.2,
+                    "top_p": 0.95,
+                    "top_k": 40,
+                    "max_output_tokens": 2048,
+                },
+                tools=[find_match_function]
+            )
 
-            with open(env_path, 'r') as file:
-                lines = file.readlines()
+            # Extract the function call result
+            if hasattr(response, 'candidates') and response.candidates:
+                function_calls = response.candidates[0].content.parts[0].function_call
+                if function_calls:
+                    match_result = function_calls.args
+                    return match_result
 
-            # Update token verification status in .env content
-            new_lines = []
-            for line in lines:
-                line = line.strip()
-                if line.startswith('ZOOM_WEBHOOK_SECRET_'):
-                    # Extract the token number and current value
-                    parts = line.split('=', 1)
-                    if len(parts) != 2:
-                        new_lines.append(line)
-                        continue
-
-                    key, value = parts
-                    token_num = key.split('_')[-1]
-
-                    # Find if this is a token we know about
-                    try:
-                        token_index = int(token_num) - 1
-                        if token_index < len(self.tokens):
-                            token = self.tokens[token_index]
-                            # Replace or add verification status
-                            if '|' in value:
-                                token_value = value.split('|', 1)[0]
-                            else:
-                                token_value = value
-                            new_line = f"{key}={token_value}|{str(self.verified_tokens[token]).lower()}"
-                            new_lines.append(new_line)
-                        else:
-                            new_lines.append(line)
-                    except (ValueError, IndexError):
-                        new_lines.append(line)
-                else:
-                    new_lines.append(line)
-
-            # Write updated content back to .env file
-            with open(env_path, 'w') as file:
-                file.write('\n'.join(new_lines))
-
-            print(f"Saved verification status to .env file")
+            # Fallback if structured output isn't available
+            return {
+                "matchedPersonId": None,
+                "confidence": 0,
+                "reasoning": "Failed to get structured output from AI model."
+            }
 
         except Exception as e:
-            print(f"Error saving verification status: {e}")
+            print(f"Error in AI matching: {str(e)}")
+            return {
+                "matchedPersonId": None,
+                "confidence": 0,
+                "reasoning": f"Error in AI processing: {str(e)}"
+            }
 
-    def get_next_unverified_token(self) -> str:
-        """Get the next unverified token in sequence"""
-        for token in self.tokens:
-            if not self.verified_tokens[token]:
-                return token
-        return self.tokens[0]  # If all verified, return first token
+    async def process_participant_joined(self, webhook_data):
+        """Process participant joined event and handle attendance marking."""
+        if "payload" not in webhook_data or "object" not in webhook_data["payload"]:
+            return {"status": "error", "message": "Invalid webhook data format"}
 
-    def mark_token_as_verified(self, token: str):
-        """Mark a specific token as verified and save status"""
-        if token in self.verified_tokens:
-            self.verified_tokens[token] = True
-            # Save the updated verification status to .env
-            self.save_verification_status()
+        obj = webhook_data["payload"]["object"]
+        participant = obj.get("participant", {})
 
-    def verify_signature(self, signature: str, message: str) -> bool:
-        """Try to verify signature with all tokens"""
-        if not signature.startswith("v0="):
-            return False
+        participant_name = participant.get("user_name", "Unknown")
+        join_time = participant.get("join_time")
 
-        received_hash = signature[3:]  # Remove 'v0='
+        # Get today's date in YYYY-MM-DD format from the join_time
+        if join_time:
+            today_date = join_time.split("T")[0]  # Extract YYYY-MM-DD from ISO format
+        else:
+            # Fallback to current date if join_time is not available
+            today_date = datetime.datetime.now().strftime("%Y-%m-%d")
 
-        for token in self.tokens:
-            expected_hash = generate_hash(message, token)
-            if hmac.compare_digest(received_hash, expected_hash):
-                return True
+        # Get roster list
+        roster = await self.get_roster()
+
+        # Use Gemini to match participant with roster
+        match_result = await self.match_participant_with_roster(participant_name, roster)
+
+        person_id = match_result.get("matchedPersonId")
+        confidence = match_result.get("confidence", 0)
+        reasoning = match_result.get("reasoning", "")
+
+        # Log the matching attempt
+        print(f"Matching '{participant_name}': ID={person_id}, Confidence={confidence}, Reason={reasoning}")
+
+        if person_id and confidence >= 0.6:
+            # Found a match with good confidence - mark attendance
+            try:
+                attendance_result = await self.mark_attendance(person_id, today_date)
+                return {
+                    "status": "success",
+                    "action": "marked_attendance",
+                    "personId": person_id,
+                    "confidence": confidence,
+                    "reasoning": reasoning
+                }
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "message": f"Failed to mark attendance: {str(e)}",
+                    "personId": person_id,
+                    "confidence": confidence
+                }
+        else:
+            # No good match found - log as unidentified
+            try:
+                unidentified_result = await self.log_unidentified_participant(
+                    participant_name, join_time, today_date
+                )
+                return {
+                    "status": "success",
+                    "action": "logged_unidentified",
+                    "name": participant_name,
+                    "confidence": confidence,
+                    "reasoning": reasoning
+                }
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "message": f"Failed to log unidentified participant: {str(e)}"
+                }
+
+# Initialize the processor
+attendance_processor = AttendanceProcessor()
+
+def verify_zoom_signature(signature: str, timestamp: str, request_body: bytes) -> bool:
+    """Verify Zoom webhook signature."""
+    if not ZOOM_WEBHOOK_SECRET:
+        # Skip verification if secret is not set (for testing)
+        return True
+
+    if not signature.startswith("v0="):
         return False
 
-# Initialize the account manager
-account_manager = ZoomAccountManager()
+    # Create message string with timestamp and request body
+    message = f"v0:{timestamp}:{request_body.decode('utf-8')}"
 
-def generate_hash(message: str, secret: str) -> str:
-    """Generate HMAC SHA-256 hash for a message using the secret token"""
-    return hmac.new(
-        secret.encode('utf-8'),
+    # Generate HMAC SHA-256 hash
+    expected_signature = hmac.new(
+        ZOOM_WEBHOOK_SECRET.encode('utf-8'),
         message.encode('utf-8'),
         hashlib.sha256
     ).hexdigest()
 
-class MeetingStateManager:
-    def __init__(self):
-        self.meetings: Dict[str, Dict[str, Any]] = {}
-        self.et_tz = pendulum.timezone('America/New_York')
-
-        # Create folder for Raw data
-        self.raw_dir = pathlib.Path("Raw")
-        self.raw_dir.mkdir(exist_ok=True)
-
-    def store_raw_webhook(self, meeting_uuid: str, data: Dict[str, Any]) -> None:
-        """Store raw webhook data to file system"""
-        # Get current date for folder structure
-        now = pendulum.now()
-        date_str = now.format('YYYY-MM-DD')
-        timestamp = now.format('YYYY-MM-DD_HH-mm-ss-SSS')
-
-        # Create directory structure
-        day_dir = self.raw_dir / date_str
-        meeting_dir = day_dir / meeting_uuid
-        meeting_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write webhook data to file
-        file_path = meeting_dir / f"{timestamp}.json"
-        with open(file_path, 'w') as f:
-            json.dump(data, f, indent=2)
-
-        # Also print to console for debugging
-        print(f"Webhook received: {json.dumps(data)}")
-
-    def process_webhook(self, data: Dict[str, Any]) -> None:
-        """Process a webhook and update meeting state"""
-        event_type = data.get("event")
-
-        # Extract meeting UUID from different event types
-        meeting_uuid = None
-        topic = None
-
-        if "payload" in data and "object" in data["payload"]:
-            obj = data["payload"]["object"]
-
-            if "uuid" in obj:
-                meeting_uuid = obj["uuid"]
-
-            if "topic" in obj:
-                topic = obj["topic"]
-
-        # Store raw webhook data
-        if meeting_uuid:
-            self.store_raw_webhook(meeting_uuid, data)
-
-        # Process based on event type
-        if event_type == "meeting.started":
-            self._handle_meeting_started(data)
-        elif event_type == "meeting.ended":
-            self._handle_meeting_ended(data)
-        elif event_type == "meeting.participant_joined":
-            self._handle_participant_joined(data)
-        elif event_type == "meeting.participant_left":
-            self._handle_participant_left(data)
-        elif event_type == "meeting.chat_message_sent":
-            self._handle_chat_message(data)
-
-    def _handle_meeting_started(self, data: Dict[str, Any]) -> None:
-        """Handle meeting.started webhook"""
-        if "payload" not in data or "object" not in data["payload"]:
-            return
-
-        obj = data["payload"]["object"]
-        meeting_uuid = obj.get("uuid")
-        if not meeting_uuid:
-            return
-
-        # Initialize meeting state if not exists
-        if meeting_uuid not in self.meetings:
-            self.meetings[meeting_uuid] = {
-                "topic": obj.get("topic", "Unnamed Meeting"),
-                "start_time": obj.get("start_time"),
-                "timezone": obj.get("timezone"),
-                "host_id": obj.get("host_id"),
-                "duration": obj.get("duration"),
-                "participants": {},  # participant_uuid -> participant data
-                "chat_messages": [],
-                "is_active": True
-            }
-
-    def _handle_meeting_ended(self, data: Dict[str, Any]) -> None:
-        """Handle meeting.ended webhook"""
-        if "payload" not in data or "object" not in data["payload"]:
-            return
-
-        obj = data["payload"]["object"]
-        meeting_uuid = obj.get("uuid")
-        if not meeting_uuid or meeting_uuid not in self.meetings:
-            return
-
-        # Update meeting state
-        self.meetings[meeting_uuid]["is_active"] = False
-        self.meetings[meeting_uuid]["end_time"] = obj.get("end_time")
-
-    def _handle_participant_joined(self, data: Dict[str, Any]) -> None:
-        """Handle meeting.participant_joined webhook"""
-        if "payload" not in data or "object" not in data["payload"]:
-            return
-
-        obj = data["payload"]["object"]
-        meeting_uuid = obj.get("uuid")
-        if not meeting_uuid or meeting_uuid not in self.meetings:
-            return
-
-        if "participant" not in obj:
-            return
-
-        participant = obj["participant"]
-        participant_uuid = participant.get("participant_uuid")
-        if not participant_uuid:
-            return
-
-        join_time = pendulum.parse(participant.get("join_time"))
-
-        # Update or create participant record
-        if participant_uuid not in self.meetings[meeting_uuid]["participants"]:
-            self.meetings[meeting_uuid]["participants"][participant_uuid] = {
-                "user_name": participant.get("user_name", "Unknown"),
-                "email": participant.get("email", ""),
-                "sessions": [],
-                "chat_count": 0,
-                "first_join": join_time
-            }
-
-        # Add new session
-        self.meetings[meeting_uuid]["participants"][participant_uuid]["sessions"].append({
-            "join_time": join_time,
-            "leave_time": None
-        })
-
-    def _handle_participant_left(self, data: Dict[str, Any]) -> None:
-        """Handle meeting.participant_left webhook"""
-        if "payload" not in data or "object" not in data["payload"]:
-            return
-
-        obj = data["payload"]["object"]
-        meeting_uuid = obj.get("uuid")
-        if not meeting_uuid or meeting_uuid not in self.meetings:
-            return
-
-        if "participant" not in obj:
-            return
-
-        participant = obj["participant"]
-        participant_uuid = participant.get("participant_uuid")
-        if not participant_uuid or participant_uuid not in self.meetings[meeting_uuid]["participants"]:
-            return
-
-        leave_time = pendulum.parse(participant.get("leave_time"))
-
-        # Update the most recent session with leave time
-        sessions = self.meetings[meeting_uuid]["participants"][participant_uuid]["sessions"]
-        if sessions:
-            for session in reversed(sessions):
-                if session["leave_time"] is None:
-                    session["leave_time"] = leave_time
-                    break
-
-    def _handle_chat_message(self, data: Dict[str, Any]) -> None:
-        """Handle meeting.chat_message_sent webhook"""
-        if "payload" not in data or "object" not in data["payload"]:
-            return
-
-        obj = data["payload"]["object"]
-        meeting_uuid = obj.get("uuid")
-        if not meeting_uuid or meeting_uuid not in self.meetings:
-            return
-
-        if "chat_message" not in obj:
-            return
-
-        chat = obj["chat_message"]
-        sender_name = chat.get("sender_name", "Unknown")
-        sender_email = chat.get("sender_email", "")
-        message_time = pendulum.parse(chat.get("date_time"))
-
-        # Add to chat messages
-        self.meetings[meeting_uuid]["chat_messages"].append({
-            "sender_name": sender_name,
-            "sender_email": sender_email,
-            "time": message_time,
-            "content": chat.get("message_content", "")
-        })
-
-        # Update participant chat count if we can find them
-        for participant_uuid, participant_data in self.meetings[meeting_uuid]["participants"].items():
-            if (participant_data["user_name"] == sender_name or
-                (sender_email and participant_data["email"] == sender_email)):
-                participant_data["chat_count"] += 1
-                break
-
-    def get_participant_tracking(self, meeting_uuid: str) -> Dict[str, Any]:
-        """Get participant tracking data for a meeting"""
-        if meeting_uuid not in self.meetings:
-            return {"error": "Meeting not found"}
-
-        meeting = self.meetings[meeting_uuid]
-
-        # Format participant data
-        participants_data = []
-        for participant_uuid, participant in meeting["participants"].items():
-            sessions = []
-            total_time = 0
-
-            for session in participant["sessions"]:
-                join_time = session["join_time"]
-                # If participant hasn't left yet, use current time
-                leave_time = session["leave_time"] or pendulum.now()
-
-                # Calculate session duration in seconds
-                duration_seconds = (leave_time - join_time).total_seconds()
-                total_time += duration_seconds
-
-                # Format times for display
-                join_time_str = join_time.in_timezone(self.et_tz).format('YYYY-MM-DD HH:mm:ss')
-                leave_time_str = leave_time.in_timezone(self.et_tz).format('YYYY-MM-DD HH:mm:ss') if session["leave_time"] else "Still active"
-
-                sessions.append({
-                    "join_time": join_time_str,
-                    "leave_time": leave_time_str,
-                    "duration_minutes": round(duration_seconds / 60, 1)
-                })
-
-            participants_data.append({
-                "name": participant["user_name"],
-                "email": participant["email"],
-                "first_join": participant["first_join"].in_timezone(self.et_tz).format('YYYY-MM-DD HH:mm:ss'),
-                "total_time_minutes": round(total_time / 60, 1),
-                "sessions": sessions,
-                "chat_messages": participant["chat_count"]
-            })
-
-        # Sort participants by name
-        participants_data.sort(key=lambda x: x["name"])
-
-        return {
-            "meeting_topic": meeting["topic"],
-            "meeting_start": pendulum.parse(meeting["start_time"]).in_timezone(self.et_tz).format('YYYY-MM-DD HH:mm:ss') if meeting["start_time"] else "Unknown",
-            "meeting_end": pendulum.parse(meeting["end_time"]).in_timezone(self.et_tz).format('YYYY-MM-DD HH:mm:ss') if meeting.get("end_time") else "Still active",
-            "is_active": meeting["is_active"],
-            "total_participants": len(meeting["participants"]),
-            "participants": participants_data
-        }
-
-# Initialize the meeting state manager
-meeting_state = MeetingStateManager()
+    # Compare signatures
+    received_signature = signature[3:]  # Remove 'v0='
+    return hmac.compare_digest(received_signature, expected_signature)
 
 @app.post("/zoom/webhook")
 async def zoom_webhook(request: Request):
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{current_time}] Webhook received. Processing...")
-
-    # Get the raw body content
+    """Process Zoom webhook events."""
+    # Get the raw body for signature verification
     body = await request.body()
-    body_str = body.decode('utf-8')
 
-    # Save raw webhook immediately, before any processing
+    # Verify Zoom webhook signature
+    signature = request.headers.get("x-zm-signature", "")
+    timestamp = request.headers.get("x-zm-request-timestamp", "")
+
+    if not verify_zoom_signature(signature, timestamp, body):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    # Parse webhook data
     try:
-        data = json.loads(body_str)
-        event_type = data.get("event", "unknown")
-        print(f"[{current_time}] Webhook event type: {event_type}")
-
-        # Extract meeting UUID if available
-        meeting_uuid = None
-        if "payload" in data and "object" in data["payload"]:
-            obj = data["payload"]["object"]
-            if "uuid" in obj:
-                meeting_uuid = obj["uuid"]
-
-        # If we have a meeting UUID, save to the proper structure immediately
-        if meeting_uuid:
-            now = datetime.now()
-            date_str = now.strftime("%Y-%m-%d")
-            timestamp = now.strftime("%Y-%m-%d_%H-%M-%S-%f")
-
-            # Create directory structure
-            raw_dir = pathlib.Path("Raw")
-            day_dir = raw_dir / date_str
-            meeting_dir = day_dir / meeting_uuid
-            meeting_dir.mkdir(parents=True, exist_ok=True)
-
-            # Write webhook data to file immediately
-            file_path = meeting_dir / f"{timestamp}.json"
-            with open(file_path, 'w') as f:
-                json.dump(data, f, indent=2)
-
-            print(f"[{current_time}] Raw webhook saved to {file_path}")
-        else:
-            # No meeting UUID, save in a general directory
-            now = datetime.now()
-            date_str = now.strftime("%Y-%m-%d")
-            timestamp = now.strftime("%Y-%m-%d_%H-%M-%S-%f")
-
-            # Create directory structure
-            raw_dir = pathlib.Path("Raw")
-            day_dir = raw_dir / date_str
-            general_dir = day_dir / "general"
-            general_dir.mkdir(parents=True, exist_ok=True)
-
-            # Write webhook data to file
-            file_path = general_dir / f"{timestamp}_{event_type}.json"
-            with open(file_path, 'w') as f:
-                json.dump(data, f, indent=2)
-
-            print(f"[{current_time}] Raw webhook (no meeting UUID) saved to {file_path}")
+        data = json.loads(body)
     except json.JSONDecodeError:
-        print(f"[{current_time}] Error parsing webhook JSON")
-
-        # Save invalid JSON to a separate directory
-        now = datetime.now()
-        date_str = now.strftime("%Y-%m-%d")
-        timestamp = now.strftime("%Y-%m-%d_%H-%M-%S-%f")
-
-        raw_dir = pathlib.Path("Raw")
-        day_dir = raw_dir / date_str
-        error_dir = day_dir / "invalid_json"
-        error_dir.mkdir(parents=True, exist_ok=True)
-
-        # Save the raw body that couldn't be parsed
-        file_path = error_dir / f"{timestamp}_invalid.txt"
-        with open(file_path, 'w') as f:
-            f.write(body_str)
-
-        print(f"[{current_time}] Invalid JSON saved to {file_path}")
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # Case 1: Endpoint URL Validation
-    if event_type == "endpoint.url_validation":
-        print(f"[{current_time}] Processing endpoint validation")
-        plain_token = data.get("payload", {}).get("plainToken")
-        if not plain_token:
-            print(f"[{current_time}] Error: No plain token provided")
-            raise HTTPException(status_code=400, detail="No plain token provided")
+    # Process based on event type
+    event_type = data.get("event")
 
-        # Use the first available token for validation
-        current_token = account_manager.get_next_unverified_token()
-        encrypted_token = generate_hash(plain_token, current_token)
-
-        # Mark this token as verified
-        account_manager.mark_token_as_verified(current_token)
-
-        # Log verification status
-        verified_count = sum(account_manager.verified_tokens.values())
-        total_count = len(account_manager.tokens)
-        print(f"[{current_time}] Verified {verified_count} out of {total_count} accounts")
-
-        print(f"[{current_time}] Validation successful, returning encrypted token")
-        return JSONResponse(content={
-            "plainToken": plain_token,
-            "encryptedToken": encrypted_token
-        })
-
-    # Case 2: Regular Webhook Events
-    print(f"[{current_time}] Processing regular webhook: {event_type}")
-
-    # Process webhook data
-    meeting_state.process_webhook(data)
-
-    print(f"[{current_time}] Webhook processing complete for {event_type}")
-    return {
-        "status": "success",
-        "message": f"Webhook processed for event: {event_type}"
-    }
-
-@app.get("/verification-status")
-async def get_verification_status():
-    """Endpoint to check verification status of all accounts"""
-    verified_count = sum(account_manager.verified_tokens.values())
-    total_count = len(account_manager.tokens)
-    return {
-        "total_accounts": total_count,
-        "verified_accounts": verified_count,
-        "status_by_token": {
-            f"account_{i+1}": verified
-            for i, verified in enumerate(account_manager.verified_tokens.values())
-        }
-    }
+    if event_type == "meeting.participant_joined":
+        result = await attendance_processor.process_participant_joined(data)
+        return result
+    else:
+        # For other event types, just acknowledge receipt
+        return {"status": "success", "message": f"Event {event_type} received but not processed"}
 
 @app.get("/test")
-async def health_check():
-    """Simple health check endpoint"""
+async def test_endpoint():
+    """Simple health check endpoint."""
     return {"status": "ok"}
 
-@app.post("/reset-token")
-async def reset_token(request: Request):
-    """Reset verification status for all tokens"""
-    try:
-        # Optional: If body is provided, reset specific token
-        body = await request.body()
-        if body:
-            try:
-                data = json.loads(body)
-                token = data.get("token")
+@app.get("/roster")
+async def get_roster():
+    """Endpoint to get the roster (for testing)."""
+    roster = await attendance_processor.get_roster(force_refresh=True)
+    return {"roster_count": len(roster), "first_few": roster[:5]}
 
-                if token:
-                    # Check if token exists in our list
-                    if token not in account_manager.tokens:
-                        raise HTTPException(status_code=404, detail="Token not found")
+@app.post("/refresh-roster")
+async def refresh_roster():
+    """Force-refresh the roster cache."""
+    roster = await attendance_processor.get_roster(force_refresh=True)
+    return {"status": "success", "message": f"Roster refreshed with {len(roster)} entries"}
 
-                    # Reset the verification status for specific token
-                    account_manager.verified_tokens[token] = False
+@app.post("/test-matching")
+async def test_matching(request: Request):
+    """Test the Gemini AI name matching."""
+    data = await request.json()
+    name = data.get("name")
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
 
-                    # Find the account number for this token
-                    account_number = account_manager.tokens.index(token) + 1
+    roster = await attendance_processor.get_roster()
+    match_result = await attendance_processor.match_participant_with_roster(name, roster)
 
-                    # Save the updated verification status
-                    account_manager.save_verification_status()
+    # If we have a match, include the person's details
+    if match_result.get("matchedPersonId"):
+        person_id = match_result["matchedPersonId"]
+        person_details = next((p for p in roster if p.get("Id") == person_id), None)
+        match_result["personDetails"] = person_details
 
-                    return {
-                        "status": "success",
-                        "message": f"Verification status reset for account {account_number}",
-                        "account_number": account_number
-                    }
-            except json.JSONDecodeError:
-                # If JSON is invalid, continue to reset all tokens
-                pass
-
-        # Reset all tokens
-        for token in account_manager.tokens:
-            account_manager.verified_tokens[token] = False
-
-        # Save the updated verification status
-        account_manager.save_verification_status()
-
-        return {
-            "status": "success",
-            "message": f"Verification status reset for all {len(account_manager.tokens)} accounts",
-            "total_accounts": len(account_manager.tokens)
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error resetting tokens: {str(e)}")
-
-
-@app.get("/meetings")
-async def get_meetings():
-    """Get list of active meetings"""
-    active_meetings = {}
-    for uuid, meeting in meeting_state.meetings.items():
-        if meeting["is_active"]:
-            active_meetings[uuid] = {
-                "topic": meeting["topic"],
-                "start_time": meeting["start_time"],
-                "participant_count": len(meeting["participants"])
-            }
-
-    return {
-        "active_meetings": active_meetings,
-        "total_count": len(active_meetings)
-    }
-
-@app.get("/participant-tracking/{meeting_uuid}")
-async def get_participant_tracking(meeting_uuid: str):
-    """Get detailed participant tracking for a meeting"""
-    try:
-        tracking_data = meeting_state.get_participant_tracking(meeting_uuid)
-        return tracking_data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error retrieving participant tracking: {str(e)}")
+    return match_result
 
 if __name__ == "__main__":
     import uvicorn
