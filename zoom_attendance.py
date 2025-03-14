@@ -7,6 +7,7 @@ import hashlib
 import pathlib
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 from typing import Dict, List, Any, Optional, Set
 import google.generativeai as genai
 import asyncio
@@ -690,12 +691,15 @@ async def zoom_webhook(request: Request):
         print(f"[{current_time}] Using token (first 5 chars): {current_token[:5]}...")
         print(f"[{current_time}] Plain token from Zoom: {plain_token}")
 
-        # Generate hash exactly as specified by Zoom
-        encrypted_token = hmac.new(
-            current_token.encode('utf-8'),
-            plain_token.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
+        # Generate hash using the helper function
+        def generate_hash(message: str, secret: str) -> str:
+            return hmac.new(
+                secret.encode('utf-8'),
+                message.encode('utf-8'),
+                hashlib.sha256
+            ).hexdigest()
+
+        encrypted_token = generate_hash(plain_token, current_token)
 
         print(f"[{current_time}] Generated encrypted token: {encrypted_token}")
 
@@ -714,7 +718,7 @@ async def zoom_webhook(request: Request):
         }
 
         print(f"[{current_time}] Validation response: {json.dumps(response)}")
-        return response
+        return JSONResponse(content=response)
 
     # Case 2: Verify signature for regular webhook events
     signature = request.headers.get("x-zm-signature", "")
