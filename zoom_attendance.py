@@ -645,15 +645,21 @@ async def zoom_webhook(request: Request):
     """Process Zoom webhook events."""
     # Get the raw body for signature verification
     body = await request.body()
+    body_str = body.decode("utf-8")
+
+    # Log the raw request details
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{current_time}] Raw webhook received: {body_str[:200]}...")
+    print(f"[{current_time}] Headers: {dict(request.headers)}")
 
     # Try to parse JSON
     try:
-        data = json.loads(body)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+        data = json.loads(body_str)
+    except json.JSONDecodeError as e:
+        print(f"[{current_time}] JSON parse error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
 
     event_type = data.get("event")
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{current_time}] Webhook received: {event_type}")
 
     # Extract meeting UUID if available for raw data storage
@@ -668,6 +674,8 @@ async def zoom_webhook(request: Request):
     # Case 1: Handle Zoom endpoint verification
     if event_type == "endpoint.url_validation":
         print(f"[{current_time}] Processing endpoint validation")
+        print(f"[{current_time}] Full validation payload: {json.dumps(data)}")
+
         plain_token = data.get("payload", {}).get("plainToken")
         if not plain_token:
             print(f"[{current_time}] Error: No plain token provided")
@@ -676,13 +684,20 @@ async def zoom_webhook(request: Request):
         # Use the next unverified token for validation
         current_token = config.get_next_unverified_token()
         if not current_token:
+            print(f"[{current_time}] Error: No webhook tokens configured")
             raise HTTPException(status_code=500, detail="No webhook tokens configured")
 
+        print(f"[{current_time}] Using token (first 5 chars): {current_token[:5]}...")
+        print(f"[{current_time}] Plain token from Zoom: {plain_token}")
+
+        # Generate hash exactly as specified by Zoom
         encrypted_token = hmac.new(
             current_token.encode('utf-8'),
             plain_token.encode('utf-8'),
             hashlib.sha256
         ).hexdigest()
+
+        print(f"[{current_time}] Generated encrypted token: {encrypted_token}")
 
         # Mark this token as verified
         config.mark_token_as_verified(current_token)
@@ -692,18 +707,26 @@ async def zoom_webhook(request: Request):
         total_count = len(config.ZOOM_WEBHOOK_SECRET_TOKENS)
         print(f"[{current_time}] Verified {verified_count} out of {total_count} accounts")
 
-        print(f"[{current_time}] Validation successful, returning encrypted token")
-        return {
+        # Prepare response
+        response = {
             "plainToken": plain_token,
             "encryptedToken": encrypted_token
         }
+
+        print(f"[{current_time}] Validation response: {json.dumps(response)}")
+        return response
 
     # Case 2: Verify signature for regular webhook events
     signature = request.headers.get("x-zm-signature", "")
     timestamp = request.headers.get("x-zm-request-timestamp", "")
 
+    print(f"[{current_time}] Webhook headers - Signature: {signature}, Timestamp: {timestamp}")
+
     if signature and timestamp:
-        if not config.verify_zoom_signature(signature, timestamp, body):
+        signature_valid = config.verify_zoom_signature(signature, timestamp, body)
+        print(f"[{current_time}] Signature verification result: {signature_valid}")
+
+        if not signature_valid:
             print(f"[{current_time}] Invalid signature - rejecting webhook")
             raise HTTPException(status_code=401, detail="Invalid signature")
     elif config.ZOOM_WEBHOOK_SECRET_TOKENS:
@@ -713,10 +736,13 @@ async def zoom_webhook(request: Request):
 
     # Process based on event type
     if event_type == "meeting.participant_joined":
+        print(f"[{current_time}] Processing participant joined event")
         result = await attendance_processor.process_participant_joined(data)
+        print(f"[{current_time}] Participant processing result: {json.dumps(result)}")
         return result
     else:
         # For other event types, just acknowledge receipt
+        print(f"[{current_time}] Event {event_type} received but not processed")
         return {"status": "success", "message": f"Event {event_type} received but not processed"}
 
 @app.get("/test")
