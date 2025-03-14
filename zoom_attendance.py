@@ -4,6 +4,7 @@ import requests
 import datetime
 import hmac
 import hashlib
+import pathlib
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
 from typing import Dict, List, Any, Optional, Set
@@ -26,7 +27,8 @@ class Config:
     UNIDENTIFIED_TABLE_ID = os.getenv("UNIDENTIFIED_TABLE_ID", "mhsf4s0jhp90gnn")
 
     # Zoom webhook verification
-    ZOOM_WEBHOOK_SECRET = os.getenv("ZOOM_WEBHOOK_SECRET")
+    ZOOM_WEBHOOK_SECRET_TOKENS = []
+    ZOOM_WEBHOOK_SECRET_VERIFIED = {}
 
     # AI Configuration
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -39,6 +41,153 @@ class Config:
     # Cache settings
     ROSTER_CACHE_SECONDS = int(os.getenv("ROSTER_CACHE_SECONDS", "600"))
 
+    def __init__(self):
+        self.load_zoom_tokens_from_env()
+
+    def load_zoom_tokens_from_env(self):
+        """Load webhook secret tokens and their verification status from environment variables"""
+        i = 1
+        while True:
+            token_entry = os.getenv(f'ZOOM_WEBHOOK_SECRET_{i}')
+            if token_entry is None:
+                break
+
+            # Check if token has a verification state attached with '|' separator
+            if '|' in token_entry:
+                token, verified_str = token_entry.split('|', 1)
+                verified = verified_str.lower() == 'true'
+            else:
+                token = token_entry
+                verified = False
+
+            self.ZOOM_WEBHOOK_SECRET_TOKENS.append(token)
+            self.ZOOM_WEBHOOK_SECRET_VERIFIED[token] = verified
+            i += 1
+
+        # Backward compatibility with older .env format
+        legacy_token = os.getenv("ZOOM_WEBHOOK_SECRET")
+        if legacy_token and legacy_token not in self.ZOOM_WEBHOOK_SECRET_TOKENS:
+            self.ZOOM_WEBHOOK_SECRET_TOKENS.append(legacy_token)
+            self.ZOOM_WEBHOOK_SECRET_VERIFIED[legacy_token] = True
+
+        if not self.ZOOM_WEBHOOK_SECRET_TOKENS:
+            print("WARNING: No Zoom webhook secret tokens found in environment variables")
+
+        # Log current verification status
+        verified_count = sum(1 for v in self.ZOOM_WEBHOOK_SECRET_VERIFIED.values() if v)
+        print(f"Loaded {len(self.ZOOM_WEBHOOK_SECRET_TOKENS)} Zoom token(s), {verified_count} already verified")
+
+    def save_verification_status(self):
+        """Save verification status to .env file"""
+        try:
+            # Read existing .env file
+            env_path = os.path.join(os.getcwd(), '.env')
+            if not os.path.exists(env_path):
+                print("Warning: .env file not found, cannot save verification status")
+                return
+
+            with open(env_path, 'r') as file:
+                lines = file.readlines()
+
+            # Update token verification status in .env content
+            new_lines = []
+            token_entries_updated = set()
+
+            for line in lines:
+                line = line.strip()
+                if line.startswith('ZOOM_WEBHOOK_SECRET_'):
+                    # Extract the token number and current value
+                    parts = line.split('=', 1)
+                    if len(parts) != 2:
+                        new_lines.append(line)
+                        continue
+
+                    key, value = parts
+                    token_num = key.split('_')[-1]
+
+                    # Find if this is a token we know about
+                    try:
+                        token_index = int(token_num) - 1
+                        if token_index < len(self.ZOOM_WEBHOOK_SECRET_TOKENS):
+                            token = self.ZOOM_WEBHOOK_SECRET_TOKENS[token_index]
+                            token_entries_updated.add(token)
+                            # Replace or add verification status
+                            if '|' in value:
+                                token_value = value.split('|', 1)[0]
+                            else:
+                                token_value = value
+                            new_line = f"{key}={token_value}|{str(self.ZOOM_WEBHOOK_SECRET_VERIFIED[token]).lower()}"
+                            new_lines.append(new_line)
+                        else:
+                            new_lines.append(line)
+                    except (ValueError, IndexError):
+                        new_lines.append(line)
+                elif line.startswith('ZOOM_WEBHOOK_SECRET='):
+                    # Handle legacy token format
+                    parts = line.split('=', 1)
+                    if len(parts) == 2:
+                        legacy_token = parts[1]
+                        if legacy_token in self.ZOOM_WEBHOOK_SECRET_TOKENS:
+                            token_entries_updated.add(legacy_token)
+                            new_lines.append(line)  # Keep the original line
+                else:
+                    new_lines.append(line)
+
+            # Add any tokens that weren't already in the file
+            for i, token in enumerate(self.ZOOM_WEBHOOK_SECRET_TOKENS):
+                if token not in token_entries_updated:
+                    # This is a new token that wasn't in the file
+                    new_lines.append(f"ZOOM_WEBHOOK_SECRET_{i+1}={token}|{str(self.ZOOM_WEBHOOK_SECRET_VERIFIED[token]).lower()}")
+
+            # Write updated content back to .env file
+            with open(env_path, 'w') as file:
+                file.write('\n'.join(new_lines))
+
+            print(f"Saved verification status to .env file")
+
+        except Exception as e:
+            print(f"Error saving verification status: {e}")
+
+    def get_next_unverified_token(self) -> str:
+        """Get the next unverified token in sequence"""
+        for token in self.ZOOM_WEBHOOK_SECRET_TOKENS:
+            if not self.ZOOM_WEBHOOK_SECRET_VERIFIED[token]:
+                return token
+        # If all verified, return first token
+        return self.ZOOM_WEBHOOK_SECRET_TOKENS[0] if self.ZOOM_WEBHOOK_SECRET_TOKENS else ""
+
+    def mark_token_as_verified(self, token: str):
+        """Mark a specific token as verified and save status"""
+        if token in self.ZOOM_WEBHOOK_SECRET_VERIFIED:
+            self.ZOOM_WEBHOOK_SECRET_VERIFIED[token] = True
+            # Save the updated verification status to .env
+            self.save_verification_status()
+
+    def verify_zoom_signature(self, signature: str, timestamp: str, request_body: bytes) -> bool:
+        """Verify Zoom webhook signature using all registered tokens."""
+        if not signature.startswith("v0="):
+            return False
+
+        received_hash = signature[3:]  # Remove 'v0='
+
+        # For compatibility with different message formats
+        message = f"v0:{timestamp}:{request_body.decode('utf-8')}"
+
+        for token in self.ZOOM_WEBHOOK_SECRET_TOKENS:
+            # Generate expected hash with this token
+            expected_hash = hmac.new(
+                token.encode('utf-8'),
+                message.encode('utf-8'),
+                hashlib.sha256
+            ).hexdigest()
+
+            # Compare signatures
+            if hmac.compare_digest(received_hash, expected_hash):
+                return True
+
+        # If we get here, no token worked
+        return False
+
     def __str__(self):
         """Return a string representation of the config (excluding sensitive values)"""
         return {
@@ -49,7 +198,9 @@ class Config:
             "USE_AI_MATCHING": self.USE_AI_MATCHING,
             "CONFIDENCE_THRESHOLD": self.CONFIDENCE_THRESHOLD,
             "DEBUG_MODE": self.DEBUG_MODE,
-            "ROSTER_CACHE_SECONDS": self.ROSTER_CACHE_SECONDS
+            "ROSTER_CACHE_SECONDS": self.ROSTER_CACHE_SECONDS,
+            "ZOOM_TOKENS_COUNT": len(self.ZOOM_WEBHOOK_SECRET_TOKENS),
+            "ZOOM_TOKENS_VERIFIED": sum(1 for v in self.ZOOM_WEBHOOK_SECRET_VERIFIED.values() if v)
         }.__str__()
 
 # Create config instance
@@ -72,7 +223,7 @@ class AttendanceProcessor:
         if config.USE_AI_MATCHING:
             try:
                 self.model = genai.GenerativeModel(
-                    model_name="gemini-2.0-flash-001",
+                    model_name="gemini-2.0-pro",
                     system_instruction="""
                     You are an attendance matching assistant. Your job is to match participant names from
                     Zoom meetings with their official names in a roster database.
@@ -138,8 +289,8 @@ class AttendanceProcessor:
             "Content-Type": "application/json"
         }
 
-        # Format date column name (YYYY_MM_DD)
-        date_column = attendance_date.replace("-", "_")
+        # Use the date directly as the column name (already in YYYY-MM-DD format)
+        date_column = attendance_date  # No need to replace - with _
 
         payload = {
             "Id": str(person_id),
@@ -468,31 +619,26 @@ class AttendanceProcessor:
                     "message": f"Failed to log unidentified participant: {str(e)}"
                 }
 
+    def store_raw_webhook(self, meeting_uuid: str, data: Dict[str, Any]) -> None:
+        """Store raw webhook data to file system"""
+        # Get current date for folder structure
+        now = datetime.datetime.now()
+        date_str = now.strftime('%Y-%m-%d')
+        timestamp = now.strftime('%Y-%m-%d_%H-%M-%S-%f')
+
+        # Create directory structure
+        raw_dir = pathlib.Path("Raw")
+        day_dir = raw_dir / date_str
+        meeting_dir = day_dir / meeting_uuid
+        meeting_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write webhook data to file
+        file_path = meeting_dir / f"{timestamp}.json"
+        with open(file_path, 'w') as f:
+            json.dump(data, f, indent=2)
+
 # Initialize the processor
 attendance_processor = AttendanceProcessor()
-
-def verify_zoom_signature(signature: str, timestamp: str, request_body: bytes) -> bool:
-    """Verify Zoom webhook signature."""
-    if not config.ZOOM_WEBHOOK_SECRET:
-        # Skip verification if secret is not set (for testing)
-        return True
-
-    if not signature.startswith("v0="):
-        return False
-
-    # Create message string with timestamp and request body
-    message = f"v0:{timestamp}:{request_body.decode('utf-8')}"
-
-    # Generate HMAC SHA-256 hash
-    expected_signature = hmac.new(
-        config.ZOOM_WEBHOOK_SECRET.encode('utf-8'),
-        message.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
-
-    # Compare signatures
-    received_signature = signature[3:]  # Remove 'v0='
-    return hmac.compare_digest(received_signature, expected_signature)
 
 @app.post("/zoom/webhook")
 async def zoom_webhook(request: Request):
@@ -500,22 +646,72 @@ async def zoom_webhook(request: Request):
     # Get the raw body for signature verification
     body = await request.body()
 
-    # Verify Zoom webhook signature
-    signature = request.headers.get("x-zm-signature", "")
-    timestamp = request.headers.get("x-zm-request-timestamp", "")
-
-    if not verify_zoom_signature(signature, timestamp, body):
-        raise HTTPException(status_code=401, detail="Invalid signature")
-
-    # Parse webhook data
+    # Try to parse JSON
     try:
         data = json.loads(body)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # Process based on event type
     event_type = data.get("event")
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{current_time}] Webhook received: {event_type}")
 
+    # Extract meeting UUID if available for raw data storage
+    meeting_uuid = None
+    if "payload" in data and "object" in data["payload"]:
+        obj = data["payload"]["object"]
+        if "uuid" in obj:
+            meeting_uuid = obj["uuid"]
+            # Store raw webhook data
+            attendance_processor.store_raw_webhook(meeting_uuid, data)
+
+    # Case 1: Handle Zoom endpoint verification
+    if event_type == "endpoint.url_validation":
+        print(f"[{current_time}] Processing endpoint validation")
+        plain_token = data.get("payload", {}).get("plainToken")
+        if not plain_token:
+            print(f"[{current_time}] Error: No plain token provided")
+            raise HTTPException(status_code=400, detail="No plain token provided")
+
+        # Use the next unverified token for validation
+        current_token = config.get_next_unverified_token()
+        if not current_token:
+            raise HTTPException(status_code=500, detail="No webhook tokens configured")
+
+        encrypted_token = hmac.new(
+            current_token.encode('utf-8'),
+            plain_token.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+
+        # Mark this token as verified
+        config.mark_token_as_verified(current_token)
+
+        # Log verification status
+        verified_count = sum(1 for v in config.ZOOM_WEBHOOK_SECRET_VERIFIED.values() if v)
+        total_count = len(config.ZOOM_WEBHOOK_SECRET_TOKENS)
+        print(f"[{current_time}] Verified {verified_count} out of {total_count} accounts")
+
+        print(f"[{current_time}] Validation successful, returning encrypted token")
+        return {
+            "plainToken": plain_token,
+            "encryptedToken": encrypted_token
+        }
+
+    # Case 2: Verify signature for regular webhook events
+    signature = request.headers.get("x-zm-signature", "")
+    timestamp = request.headers.get("x-zm-request-timestamp", "")
+
+    if signature and timestamp:
+        if not config.verify_zoom_signature(signature, timestamp, body):
+            print(f"[{current_time}] Invalid signature - rejecting webhook")
+            raise HTTPException(status_code=401, detail="Invalid signature")
+    elif config.ZOOM_WEBHOOK_SECRET_TOKENS:
+        # Only enforce signature check if tokens are configured
+        print(f"[{current_time}] Missing signature or timestamp headers")
+        raise HTTPException(status_code=401, detail="Missing signature headers")
+
+    # Process based on event type
     if event_type == "meeting.participant_joined":
         result = await attendance_processor.process_participant_joined(data)
         return result
@@ -528,6 +724,69 @@ async def test_endpoint():
     """Simple health check endpoint."""
     return {"status": "ok"}
 
+@app.get("/verification-status")
+async def get_verification_status():
+    """Endpoint to check verification status of all accounts"""
+    verified_count = sum(1 for v in config.ZOOM_WEBHOOK_SECRET_VERIFIED.values() if v)
+    total_count = len(config.ZOOM_WEBHOOK_SECRET_TOKENS)
+    return {
+        "total_accounts": total_count,
+        "verified_accounts": verified_count,
+        "status_by_token": {
+            f"account_{i+1}": verified
+            for i, verified in enumerate(config.ZOOM_WEBHOOK_SECRET_VERIFIED.values())
+        }
+    }
+
+@app.post("/reset-token")
+async def reset_token(request: Request):
+    """Reset verification status for all tokens or a specific token"""
+    try:
+        # Check if body is provided to reset specific token
+        body = await request.body()
+        if body:
+            try:
+                data = json.loads(body)
+                token = data.get("token")
+
+                if token:
+                    # Check if token exists in our list
+                    if token not in config.ZOOM_WEBHOOK_SECRET_TOKENS:
+                        raise HTTPException(status_code=404, detail="Token not found")
+
+                    # Reset the verification status for specific token
+                    config.ZOOM_WEBHOOK_SECRET_VERIFIED[token] = False
+
+                    # Find the account number for this token
+                    account_number = config.ZOOM_WEBHOOK_SECRET_TOKENS.index(token) + 1
+
+                    # Save the updated verification status
+                    config.save_verification_status()
+
+                    return {
+                        "status": "success",
+                        "message": f"Verification status reset for account {account_number}",
+                        "account_number": account_number
+                    }
+            except json.JSONDecodeError:
+                # If JSON is invalid, continue to reset all tokens
+                pass
+
+        # Reset all tokens
+        for token in config.ZOOM_WEBHOOK_SECRET_TOKENS:
+            config.ZOOM_WEBHOOK_SECRET_VERIFIED[token] = False
+
+        # Save the updated verification status
+        config.save_verification_status()
+
+        return {
+            "status": "success",
+            "message": f"Verification status reset for all {len(config.ZOOM_WEBHOOK_SECRET_TOKENS)} accounts",
+            "total_accounts": len(config.ZOOM_WEBHOOK_SECRET_TOKENS)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error resetting tokens: {str(e)}")
+
 @app.get("/debug")
 async def debug_info():
     """Get debug information about the current setup."""
@@ -537,6 +796,7 @@ async def debug_info():
     try:
         # Get roster size
         roster_count = 0
+        roster_error = None
         try:
             roster = await attendance_processor.get_roster(force_refresh=True)
             roster_count = len(roster)
@@ -566,6 +826,16 @@ async def debug_info():
             except Exception as e:
                 ai_status = f"Error: {str(e)}"
 
+        # Check zoom tokens
+        zoom_tokens_status = {
+            "total_tokens": len(config.ZOOM_WEBHOOK_SECRET_TOKENS),
+            "verified_tokens": sum(1 for v in config.ZOOM_WEBHOOK_SECRET_VERIFIED.values() if v),
+            "token_verification_status": {
+                f"token_{i+1}": {"verified": verified}
+                for i, verified in enumerate(config.ZOOM_WEBHOOK_SECRET_VERIFIED.values())
+            }
+        }
+
         return {
             "status": "ok",
             "config": {
@@ -581,8 +851,10 @@ async def debug_info():
             "status_checks": {
                 "nocodb_connection": nocodb_status,
                 "roster_count": roster_count,
+                "roster_error": roster_error,
                 "ai_status": ai_status,
-                "roster_cache_age": f"{(datetime.datetime.now() - (attendance_processor.roster_last_updated or datetime.datetime.now())).seconds} seconds" if attendance_processor.roster_last_updated else "Not cached yet"
+                "roster_cache_age": f"{(datetime.datetime.now() - (attendance_processor.roster_last_updated or datetime.datetime.now())).seconds} seconds" if attendance_processor.roster_last_updated else "Not cached yet",
+                "zoom_verification": zoom_tokens_status
             }
         }
     except Exception as e:
