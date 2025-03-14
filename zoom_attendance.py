@@ -72,7 +72,7 @@ class AttendanceProcessor:
         if config.USE_AI_MATCHING:
             try:
                 self.model = genai.GenerativeModel(
-                    model_name="gemini-2.0-pro",
+                    model_name="gemini-2.0-flash-001",
                     system_instruction="""
                     You are an attendance matching assistant. Your job is to match participant names from
                     Zoom meetings with their official names in a roster database.
@@ -138,9 +138,8 @@ class AttendanceProcessor:
             "Content-Type": "application/json"
         }
 
-        # NOTE: Column format has changed - using hyphen rather than underscore now
-        # Use the date directly as the column name (already in YYYY-MM-DD format)
-        date_column = attendance_date  # No need to replace - with _
+        # Format date column name (YYYY_MM_DD)
+        date_column = attendance_date.replace("-", "_")
 
         payload = {
             "Id": str(person_id),
