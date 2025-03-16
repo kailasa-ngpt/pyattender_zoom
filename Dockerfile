@@ -17,4 +17,4 @@ RUN mkdir -p Raw
 EXPOSE 8188
 
 # Command to run the application
-CMD ["uvicorn", "zoom_attendance:app", "--host", "0.0.0.0", "--port", "8188"]
+CMD ["uvicorn", "pyAttender:app", "--host", "0.0.0.0", "--port", "8188"]
