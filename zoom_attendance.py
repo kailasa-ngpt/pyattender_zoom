@@ -80,20 +80,40 @@ class Config:
 
     def load_zoom_tokens_from_env(self):
         """Load webhook secret tokens and their verification status from environment variables"""
-        # First check for numbered tokens (any number)
-        for key, value in os.environ.items():
-            if key.startswith('ZOOM_WEBHOOK_SECRET_') and key != 'ZOOM_WEBHOOK_SECRET':
-                try:
-                    # Extract token and verification status
-                    if '|' in value:
-                        token, verified_str = value.split('|', 1)
-                        verified = verified_str.lower() == 'true'
-                    else:
-                        token = value
-                        verified = False
+        # Clear existing tokens
+        self.ZOOM_WEBHOOK_SECRET_TOKENS = []
+        self.ZOOM_WEBHOOK_SECRET_VERIFIED = {}
+        self.webhook_number_to_token = {}  # Add this mapping dictionary
 
-                    self.ZOOM_WEBHOOK_SECRET_TOKENS.append(token)
-                    self.ZOOM_WEBHOOK_SECRET_VERIFIED[token] = verified
+        # Look for any webhook secrets with numeric identifiers
+        for key, value in os.environ.items():
+            if key.startswith('ZOOM_WEBHOOK_SECRET_'):
+                try:
+                    # Extract the numeric part of the key
+                    if '_' in key:
+                        parts = key.split('_')
+                        if len(parts) >= 3 and parts[-1].isdigit():
+                            webhook_number = parts[-1]
+
+                            # Extract token and verification status
+                            if '|' in value:
+                                token, verified_str = value.split('|', 1)
+                                verified = verified_str.lower() == 'true'
+                            else:
+                                token = value
+                                verified = False
+
+                            # Add to general token list
+                            if token not in self.ZOOM_WEBHOOK_SECRET_TOKENS:
+                                self.ZOOM_WEBHOOK_SECRET_TOKENS.append(token)
+
+                            # Set verification status
+                            self.ZOOM_WEBHOOK_SECRET_VERIFIED[token] = verified
+
+                            # Map webhook number to token
+                            self.webhook_number_to_token[webhook_number] = token
+
+                            print(f"Loaded token for webhook number {webhook_number}, verified: {verified}")
                 except Exception as e:
                     print(f"Error parsing token {key}: {e}")
 
@@ -103,11 +123,26 @@ class Config:
             self.ZOOM_WEBHOOK_SECRET_TOKENS.append(legacy_token)
             self.ZOOM_WEBHOOK_SECRET_VERIFIED[legacy_token] = True
 
+        # Log what we found
+        verified_count = sum(1 for v in self.ZOOM_WEBHOOK_SECRET_VERIFIED.values() if v)
+        print(f"Loaded {len(self.ZOOM_WEBHOOK_SECRET_TOKENS)} Zoom token(s), {verified_count} already verified")
+        print(f"Mapped webhook numbers: {list(self.webhook_number_to_token.keys())}")
+
     def get_token_by_endpoint_number(self, endpoint_number):
         """
-        Get the corresponding token for the specified endpoint number.
+        Get the corresponding token for the specified webhook number.
         Returns the token and whether it's verified.
         """
+        # Convert to string to ensure consistency
+        endpoint_number = str(endpoint_number)
+
+        # Check if we have a direct mapping for this webhook number
+        if hasattr(self, 'webhook_number_to_token') and endpoint_number in self.webhook_number_to_token:
+            token = self.webhook_number_to_token[endpoint_number]
+            is_verified = self.ZOOM_WEBHOOK_SECRET_VERIFIED.get(token, False)
+            return token, is_verified
+
+        # Fallback to the old index-based method
         try:
             # Convert to integer and adjust for zero-based indexing
             index = int(endpoint_number) - 1
@@ -117,12 +152,11 @@ class Config:
                 token = self.ZOOM_WEBHOOK_SECRET_TOKENS[index]
                 is_verified = self.ZOOM_WEBHOOK_SECRET_VERIFIED.get(token, False)
                 return token, is_verified
-            else:
-                print(f"WARNING: No token found for endpoint number {endpoint_number}")
-                return None, False
         except ValueError:
-            print(f"WARNING: Invalid endpoint number format: {endpoint_number}")
-            return None, False
+            pass
+
+        print(f"WARNING: No token found for webhook number {endpoint_number}")
+        return None, False
 
     def verify_zoom_signature_for_endpoint(self, signature, timestamp, request_body, endpoint_number):
         """
@@ -876,6 +910,14 @@ async def zoom_webhook_numbered(endpoint_number: str, request: Request):
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{current_time}] Raw webhook received at endpoint {endpoint_number}: {body_str[:200]}...")
     print(f"[{current_time}] Headers: {dict(request.headers)}")
+
+    # Log available webhook numbers
+    if hasattr(config, 'webhook_number_to_token'):
+        print(f"[{current_time}] Available webhook numbers: {list(config.webhook_number_to_token.keys())}")
+
+    # Get the token for this webhook number
+    token, is_verified = config.get_token_by_endpoint_number(endpoint_number)
+    print(f"[{current_time}] Token lookup for webhook {endpoint_number}: found={token is not None}, verified={is_verified}")
 
     # Custom header verification
     if config.ZOOM_CUSTOM_HEADER_ENABLED:
