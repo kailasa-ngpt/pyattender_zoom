@@ -80,36 +80,28 @@ class Config:
 
     def load_zoom_tokens_from_env(self):
         """Load webhook secret tokens and their verification status from environment variables"""
-        i = 1
-        while True:
-            token_entry = os.getenv(f'ZOOM_WEBHOOK_SECRET_{i}')
-            if token_entry is None:
-                break
+        # First check for numbered tokens (any number)
+        for key, value in os.environ.items():
+            if key.startswith('ZOOM_WEBHOOK_SECRET_') and key != 'ZOOM_WEBHOOK_SECRET':
+                try:
+                    # Extract token and verification status
+                    if '|' in value:
+                        token, verified_str = value.split('|', 1)
+                        verified = verified_str.lower() == 'true'
+                    else:
+                        token = value
+                        verified = False
 
-            # Check if token has a verification state attached with '|' separator
-            if '|' in token_entry:
-                token, verified_str = token_entry.split('|', 1)
-                verified = verified_str.lower() == 'true'
-            else:
-                token = token_entry
-                verified = False
+                    self.ZOOM_WEBHOOK_SECRET_TOKENS.append(token)
+                    self.ZOOM_WEBHOOK_SECRET_VERIFIED[token] = verified
+                except Exception as e:
+                    print(f"Error parsing token {key}: {e}")
 
-            self.ZOOM_WEBHOOK_SECRET_TOKENS.append(token)
-            self.ZOOM_WEBHOOK_SECRET_VERIFIED[token] = verified
-            i += 1
-
-        # Backward compatibility with older .env format
+        # Legacy token support
         legacy_token = os.getenv("ZOOM_WEBHOOK_SECRET")
         if legacy_token and legacy_token not in self.ZOOM_WEBHOOK_SECRET_TOKENS:
             self.ZOOM_WEBHOOK_SECRET_TOKENS.append(legacy_token)
             self.ZOOM_WEBHOOK_SECRET_VERIFIED[legacy_token] = True
-
-        if not self.ZOOM_WEBHOOK_SECRET_TOKENS:
-            print("WARNING: No Zoom webhook secret tokens found in environment variables")
-
-        # Log current verification status
-        verified_count = sum(1 for v in self.ZOOM_WEBHOOK_SECRET_VERIFIED.values() if v)
-        print(f"Loaded {len(self.ZOOM_WEBHOOK_SECRET_TOKENS)} Zoom token(s), {verified_count} already verified")
 
     def get_token_by_endpoint_number(self, endpoint_number):
         """
@@ -119,7 +111,7 @@ class Config:
         try:
             # Convert to integer and adjust for zero-based indexing
             index = int(endpoint_number) - 1
-            
+
             # Check if the index is valid
             if 0 <= index < len(self.ZOOM_WEBHOOK_SECRET_TOKENS):
                 token = self.ZOOM_WEBHOOK_SECRET_TOKENS[index]
@@ -140,7 +132,7 @@ class Config:
             return False
 
         received_hash = signature[3:]  # Remove 'v0='
-        
+
         # Get the token for this specific endpoint
         token, _ = self.get_token_by_endpoint_number(endpoint_number)
         if not token:
