@@ -889,10 +889,9 @@ async def zoom_webhook(request: Request):
     # Process based on event type
     if event_type == "meeting.participant_joined":
         print(f"[{current_time}] Processing participant joined event")
-        # Here you would call your attendance processor
-        # result = await attendance_processor.process_participant_joined(data)
-        # print(f"[{current_time}] Participant processing result: {json.dumps(result)}")
-        # return result
+        result = await attendance_processor.process_participant_joined(data)
+        print(f"[{current_time}] Participant processing result: {json.dumps(result)}")
+        return result
         return {"status": "success", "message": "Participant joined event received"}
     else:
         # For other event types, just acknowledge receipt
@@ -1012,10 +1011,9 @@ async def zoom_webhook_underscore(endpoint_number: str, request: Request):
     # Process based on event type
     if event_type == "meeting.participant_joined":
         print(f"[{current_time}] Processing participant joined event")
-        # Here you would call your attendance processor
-        # result = await attendance_processor.process_participant_joined(data)
-        # print(f"[{current_time}] Participant processing result: {json.dumps(result)}")
-        # return result
+        result = await attendance_processor.process_participant_joined(data)
+        print(f"[{current_time}] Participant processing result: {json.dumps(result)}")
+        return result
         return {"status": "success", "message": "Participant joined event received"}
     else:
         # For other event types, just acknowledge receipt
