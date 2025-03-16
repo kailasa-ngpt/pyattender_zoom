@@ -3,7 +3,7 @@
 ## Health Check
 ### GET `/test`
 ```bash
-curl http://localhost:8188/test
+curl http://localhost:8000/test
 ```
 **Response:**
 ```json
@@ -16,12 +16,12 @@ curl http://localhost:8188/test
 ### POST `/zoom/webhook`
 ```bash
 # Initial Verification
-curl -X POST http://localhost:8188/zoom/webhook \
+curl -X POST http://localhost:8000/zoom/webhook \
   -H "Content-Type: application/json" \
   -d '{"event": "endpoint.url_validation", "payload": {"plainToken": "your_plain_token"}}'
 
 # Webhook Events
-curl -X POST http://localhost:8188/zoom/webhook \
+curl -X POST http://localhost:8000/zoom/webhook \
   -H "Content-Type: application/json" \
   -d '{"event": "meeting.started", "payload": {"object": {"uuid": "meeting_uuid", "topic": "Meeting Topic"}}}'
 ```
@@ -29,7 +29,7 @@ curl -X POST http://localhost:8188/zoom/webhook \
 ## Active Meetings
 ### GET `/meetings`
 ```bash
-curl http://localhost:8188/meetings
+curl http://localhost:8000/meetings
 ```
 **Response:**
 ```json
@@ -45,56 +45,10 @@ curl http://localhost:8188/meetings
 }
 ```
 
-## Participant Tracking
-### GET `/participant-tracking/{meeting_uuid}`
-```bash
-curl http://localhost:8188/participant-tracking/your_meeting_uuid
-```
-**Response:**
-```json
-{
-    "meeting_topic": "Meeting Topic",
-    "meeting_start": "2025-03-09 14:30:00",
-    "meeting_end": "Still active",
-    "is_active": true,
-    "total_participants": 3,
-    "participants": [
-        {
-            "name": "John Smith",
-            "email": "john.smith@example.com",
-            "first_join": "2025-03-09 14:30:15",
-            "total_time_minutes": 45.5,
-            "sessions": [
-                {
-                    "join_time": "2025-03-09 14:30:15",
-                    "leave_time": "2025-03-09 15:15:45",
-                    "duration_minutes": 45.5
-                }
-            ],
-            "chat_messages": 4
-        },
-        {
-            "name": "Jane Doe",
-            "email": "jane.doe@example.com",
-            "first_join": "2025-03-09 14:32:20",
-            "total_time_minutes": 43.7,
-            "sessions": [
-                {
-                    "join_time": "2025-03-09 14:32:20",
-                    "leave_time": "Still active",
-                    "duration_minutes": 43.7
-                }
-            ],
-            "chat_messages": 2
-        }
-    ]
-}
-```
-
 ## Verification Status
 ### GET `/verification-status`
 ```bash
-curl http://localhost:8188/verification-status
+curl http://localhost:8000/verification-status
 ```
 **Response:**
 ```json
@@ -113,7 +67,7 @@ curl http://localhost:8188/verification-status
 ### POST `/reset-token`
 ```bash
 # Reset all tokens
-curl -X POST http://localhost:8188/reset-token
+curl -X POST http://localhost:8000/reset-token
 ```
 **Response:**
 ```json
@@ -126,7 +80,7 @@ curl -X POST http://localhost:8188/reset-token
 
 ```bash
 # Reset specific token (optional)
-curl -X POST http://localhost:8188/reset-token \
+curl -X POST http://localhost:8000/reset-token \
   -H "Content-Type: application/json" \
   -d '{"token": "your_webhook_secret_token"}'
 ```
@@ -139,12 +93,31 @@ curl -X POST http://localhost:8188/reset-token \
 }
 ```
 
+## Generate Reports Manually
+### GET `/generate-reports/{meeting_uuid}`
+```bash
+curl http://localhost:8000/generate-reports/your_meeting_uuid
+```
+**Response:**
+```json
+{
+    "status": "success",
+    "message": "Reports generated for meeting: your_meeting_uuid"
+}
+```
+
 ## File Structure
 
 ### Raw Webhooks
 - Path: `/Raw/YYYY-MM-DD/meeting_uuid/[timestamp].json`
 - Organized by date first, then by meeting UUID
 - Each webhook stored with timestamp filename
+
+### Reports
+- Path: `/Reports/YYYY-MM-DD/[Topic_ReportType_meeting_uuid].xlsx`
+- Organized by date
+- Report filenames include topic, report type, and meeting UUID
+- Report Types include HourlyReport & EoD
 
 ## Environment Configuration
 
