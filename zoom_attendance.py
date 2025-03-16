@@ -899,25 +899,21 @@ async def zoom_webhook(request: Request):
         print(f"[{current_time}] Event {event_type} received but not processed")
         return {"status": "success", "message": f"Event {event_type} received but not processed"}
 
-@app.post("/zoom/webhook/{endpoint_number}")
-async def zoom_webhook_numbered(endpoint_number: str, request: Request):
-    """Process Zoom webhook events with numbering for token selection."""
+@app.post("/zoom/webhook_{endpoint_number}")
+async def zoom_webhook_underscore(endpoint_number: str, request: Request):
+    """Process Zoom webhook events with underscore format."""
     # Get the raw body for signature verification
     body = await request.body()
     body_str = body.decode("utf-8")
 
     # Log the raw request details
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{current_time}] Raw webhook received at endpoint {endpoint_number}: {body_str[:200]}...")
+    print(f"[{current_time}] Raw webhook received at endpoint_{endpoint_number}: {body_str[:200]}...")
     print(f"[{current_time}] Headers: {dict(request.headers)}")
-
-    # Log available webhook numbers
-    if hasattr(config, 'webhook_number_to_token'):
-        print(f"[{current_time}] Available webhook numbers: {list(config.webhook_number_to_token.keys())}")
 
     # Get the token for this webhook number
     token, is_verified = config.get_token_by_endpoint_number(endpoint_number)
-    print(f"[{current_time}] Token lookup for webhook {endpoint_number}: found={token is not None}, verified={is_verified}")
+    print(f"[{current_time}] Token lookup for webhook_{endpoint_number}: found={token is not None}, verified={is_verified}")
 
     # Custom header verification
     if config.ZOOM_CUSTOM_HEADER_ENABLED:
