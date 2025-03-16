@@ -30,6 +30,11 @@ class Config:
     API_KEY_ENABLED = os.getenv("API_KEY_ENABLED", "true").lower() == "true"
     API_KEY_HEADER_NAME = os.getenv("API_KEY_HEADER_NAME", "x-api-key")
 
+    # Zoom custom Headers
+    ZOOM_CUSTOM_HEADER_KEY = os.getenv("ZOOM_CUSTOM_HEADER_KEY", "x-zoom-custom-auth")
+    ZOOM_CUSTOM_HEADER_VALUE = os.getenv("ZOOM_CUSTOM_HEADER_VALUE")
+    ZOOM_CUSTOM_HEADER_ENABLED = os.getenv("ZOOM_CUSTOM_HEADER_ENABLED", "false").lower() == "true"
+
     # Zoom webhook verification
     ZOOM_WEBHOOK_SECRET_TOKENS = []
     ZOOM_WEBHOOK_SECRET_VERIFIED = {}
@@ -48,12 +53,30 @@ class Config:
     def __init__(self):
         self.load_zoom_tokens_from_env()
         self.validate_api_key_config()
+        self.validate_zoom_custom_header_config()
 
     def validate_api_key_config(self):
         """Validate API key configuration"""
         if self.API_KEY_ENABLED and not self.API_KEY:
             print("WARNING: API key authentication is enabled but no API key is set. Set API_KEY in your .env file.")
             self.API_KEY_ENABLED = False
+
+    def verify_zoom_custom_header(self, request_headers):
+        """Verify Zoom custom header authentication"""
+        if not self.ZOOM_CUSTOM_HEADER_ENABLED:
+            return True  # If not enabled, skip this check
+
+        custom_header_value = request_headers.get(self.ZOOM_CUSTOM_HEADER_KEY)
+        if not custom_header_value:
+            return False
+
+        return custom_header_value == self.ZOOM_CUSTOM_HEADER_VALUE
+
+    def validate_zoom_custom_header_config(self):
+        """Validate Zoom custom header configuration"""
+        if self.ZOOM_CUSTOM_HEADER_ENABLED and not self.ZOOM_CUSTOM_HEADER_VALUE:
+            print("WARNING: Zoom custom header authentication is enabled but no value is set. Set ZOOM_CUSTOM_HEADER_VALUE in your .env file.")
+            self.ZOOM_CUSTOM_HEADER_ENABLED = False
 
     def load_zoom_tokens_from_env(self):
         """Load webhook secret tokens and their verification status from environment variables"""
