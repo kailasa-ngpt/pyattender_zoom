@@ -154,3 +154,66 @@ ZOOM_WEBHOOK_SECRET_3=your_third_token|false
 ```
 
 The `|true` or `|false` indicates whether the token has been verified.
+
+---
+
+# Setting Up Zoom Custom Header Authentication
+
+This guide explains how to set up the Custom Header authentication method for Zoom webhooks in your application.
+
+## What is Custom Header Authentication?
+
+Custom Header Authentication is one of Zoom's recommended verification methods for webhooks. With this method, when Zoom sends webhook notifications to your application, it includes a custom HTTP header with a predefined value. Your application verifies that the header is present and contains the expected value to ensure the request is legitimately from Zoom.
+
+## Implementation Steps
+
+### 1. Configure Your Zoom Webhook App
+
+1. Log in to the [Zoom App Marketplace Developer Portal](https://marketplace.zoom.us/develop/create)
+2. Select your Webhook app (or create a new one)
+3. Go to the "Feature" tab and find the "Event Subscriptions" section
+4. Under "Verification Token", select "Custom Header" option
+5. Enter a header name (e.g., `x-zoom-custom-auth`) and a secure value
+6. Save your changes
+
+![Zoom Custom Header Setup](https://marketplace.zoom.us/docs/images/webhooks-custom-header.png)
+
+### 2. Configure Your Application
+
+1. In your `.env` file, set the following values:
+
+```
+ZOOM_CUSTOM_HEADER_ENABLED=true
+ZOOM_CUSTOM_HEADER_KEY=x-zoom-custom-auth
+ZOOM_CUSTOM_HEADER_VALUE=your_custom_header_value_here
+```
+
+Make sure the `ZOOM_CUSTOM_HEADER_KEY` and `ZOOM_CUSTOM_HEADER_VALUE` match exactly what you configured in the Zoom Developer Portal.
+
+### 3. Testing Your Setup
+
+1. Deploy your application
+2. In the Zoom Developer Portal, click "Validate" to test the endpoint verification
+3. Check your application logs to ensure the custom header verification is working properly
+
+## Troubleshooting
+
+If you're experiencing issues with custom header verification:
+
+1. **Ensure header names match exactly**: The header name is case-sensitive. Ensure the `ZOOM_CUSTOM_HEADER_KEY` in your application matches the header name in Zoom.
+
+2. **Check header value**: The header value must match exactly. Check for any extra spaces or special characters.
+
+3. **Enable debug mode**: Set `DEBUG_MODE=true` in your `.env` file for more detailed logs.
+
+4. **Inspect raw webhook headers**: Use the `/verification-status` endpoint to check your current configuration.
+
+## Security Considerations
+
+- Use a complex, random value for your custom header to prevent guessing
+- Keep your custom header value confidential, treating it like any other secret or API key
+- Consider using both custom header verification and signature verification for enhanced security
+
+## Additional Information
+
+For more details on Zoom webhook verification methods, see the [official Zoom documentation](https://developers.zoom.us/docs/api/rest/webhook-reference/#verify-webhook-events).
