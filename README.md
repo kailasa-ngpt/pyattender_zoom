@@ -37,15 +37,10 @@ This application now supports multiple Zoom webhook endpoints with dedicated tok
 
 ## Webhook Endpoints
 
-### Default (Legacy) Endpoint
+### Default Endpoint
 - **URL**: `/zoom/webhook`
 - **Verification**: Uses the next unverified token or the first token if all are verified
 - **Usage**: Backward compatibility with existing integrations
-
-### Numbered Endpoints
-- **URL**: `/zoom/webhook_{N}` where N is a number (1, 2, 3, etc.)
-- **Verification**: Uses the corresponding token from ZOOM_WEBHOOK_SECRET_{N}
-- **Usage**: Dedicated endpoints for different Zoom accounts or applications
 
 ## Configuration
 
@@ -69,32 +64,13 @@ Each token includes a verification status (`true` or `false`), which is automati
 ### Endpoint Validation
 ---
 ```bash
-# Validate endpoint 1
-curl -X POST http://localhost:8188/zoom/webhook_1 \
+# Validate endpoint
+curl -X POST http://localhost:8188/zoom/webhook
   -H "Content-Type: application/json" \
   -d '{"event": "endpoint.url_validation", "payload": {"plainToken": "token_from_zoom"}}'
 
-# Validate endpoint 2
-curl -X POST http://localhost:8188/zoom/webhook_2 \
-  -H "Content-Type: application/json" \
-  -d '{"event": "endpoint.url_validation", "payload": {"plainToken": "token_from_zoom"}}'
 ```
 
-### Webhook Events
-```bash
-# Send event to endpoint 1
-curl -X POST http://localhost:8188/zoom/webhook_1 \
-  -H "Content-Type: application/json" \
-  -H "x-zm-signature: v0=hash_signature" \
-  -H "x-zm-request-timestamp: timestamp" \
-  -d '{"event": "meeting.started", "payload": {"object": {"uuid": "meeting_uuid"}}}'
-
-# Send event to endpoint 2
-curl -X POST http://localhost:8188/zoom/webhook_2 \
-  -H "Content-Type: application/json" \
-  -H "x-zm-signature: v0=hash_signature" \
-  -H "x-zm-request-timestamp: timestamp" \
-  -d '{"event": "meeting.started", "payload": {"object": {"uuid": "meeting_uuid"}}}'
 ```
 
 ## Zoom Configuration
