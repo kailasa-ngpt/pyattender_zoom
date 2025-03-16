@@ -8,7 +8,7 @@ import pathlib
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
-from fastapi.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Dict, List, Any, Optional, Set
 import google.generativeai as genai
 import asyncio
