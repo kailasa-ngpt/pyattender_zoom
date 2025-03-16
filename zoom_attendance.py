@@ -111,6 +111,55 @@ class Config:
         verified_count = sum(1 for v in self.ZOOM_WEBHOOK_SECRET_VERIFIED.values() if v)
         print(f"Loaded {len(self.ZOOM_WEBHOOK_SECRET_TOKENS)} Zoom token(s), {verified_count} already verified")
 
+    def get_token_by_endpoint_number(self, endpoint_number):
+        """
+        Get the corresponding token for the specified endpoint number.
+        Returns the token and whether it's verified.
+        """
+        try:
+            # Convert to integer and adjust for zero-based indexing
+            index = int(endpoint_number) - 1
+            
+            # Check if the index is valid
+            if 0 <= index < len(self.ZOOM_WEBHOOK_SECRET_TOKENS):
+                token = self.ZOOM_WEBHOOK_SECRET_TOKENS[index]
+                is_verified = self.ZOOM_WEBHOOK_SECRET_VERIFIED.get(token, False)
+                return token, is_verified
+            else:
+                print(f"WARNING: No token found for endpoint number {endpoint_number}")
+                return None, False
+        except ValueError:
+            print(f"WARNING: Invalid endpoint number format: {endpoint_number}")
+            return None, False
+
+    def verify_zoom_signature_for_endpoint(self, signature, timestamp, request_body, endpoint_number):
+        """
+        Verify Zoom webhook signature using the token associated with the specific endpoint number.
+        """
+        if not signature.startswith("v0="):
+            return False
+
+        received_hash = signature[3:]  # Remove 'v0='
+        
+        # Get the token for this specific endpoint
+        token, _ = self.get_token_by_endpoint_number(endpoint_number)
+        if not token:
+            # If no specific token found, fall back to default behavior
+            return self.verify_zoom_signature(signature, timestamp, request_body)
+
+        # For compatibility with different message formats
+        message = f"v0:{timestamp}:{request_body.decode('utf-8')}"
+
+        # Generate expected hash with this token
+        expected_hash = hmac.new(
+            token.encode('utf-8'),
+            message.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+
+        # Compare signatures
+        return hmac.compare_digest(received_hash, expected_hash)
+
     def save_verification_status(self):
         """Save verification status to .env file"""
         try:
@@ -802,6 +851,125 @@ async def zoom_webhook(request: Request):
     if signature and timestamp:
         signature_valid = config.verify_zoom_signature(signature, timestamp, body)
         print(f"[{current_time}] Signature verification result: {signature_valid}")
+
+        if not signature_valid:
+            print(f"[{current_time}] Invalid signature - rejecting webhook")
+            raise HTTPException(status_code=401, detail="Invalid signature")
+    elif config.ZOOM_WEBHOOK_SECRET_TOKENS:
+        # Only enforce signature check if tokens are configured
+        print(f"[{current_time}] Missing signature or timestamp headers")
+        raise HTTPException(status_code=401, detail="Missing signature headers")
+
+    # Process based on event type
+    if event_type == "meeting.participant_joined":
+        print(f"[{current_time}] Processing participant joined event")
+        # Here you would call your attendance processor
+        # result = await attendance_processor.process_participant_joined(data)
+        # print(f"[{current_time}] Participant processing result: {json.dumps(result)}")
+        # return result
+        return {"status": "success", "message": "Participant joined event received"}
+    else:
+        # For other event types, just acknowledge receipt
+        print(f"[{current_time}] Event {event_type} received but not processed")
+        return {"status": "success", "message": f"Event {event_type} received but not processed"}
+
+@app.post("/zoom/webhook/{endpoint_number}")
+async def zoom_webhook_numbered(endpoint_number: str, request: Request):
+    """Process Zoom webhook events with numbering for token selection."""
+    # Get the raw body for signature verification
+    body = await request.body()
+    body_str = body.decode("utf-8")
+
+    # Log the raw request details
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{current_time}] Raw webhook received at endpoint {endpoint_number}: {body_str[:200]}...")
+    print(f"[{current_time}] Headers: {dict(request.headers)}")
+
+    # Custom header verification
+    if config.ZOOM_CUSTOM_HEADER_ENABLED:
+        custom_header_verified = config.verify_zoom_custom_header(request.headers)
+        if not custom_header_verified:
+            print(f"[{current_time}] Custom header verification failed")
+            raise HTTPException(status_code=401, detail="Invalid custom header authentication")
+        else:
+            print(f"[{current_time}] Custom header verification successful")
+
+    # Try to parse JSON
+    try:
+        data = json.loads(body_str)
+    except json.JSONDecodeError as e:
+        print(f"[{current_time}] JSON parse error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+
+    event_type = data.get("event")
+    print(f"[{current_time}] Webhook received: {event_type}")
+
+    # Extract meeting UUID if available for raw data storage
+    meeting_uuid = None
+    if "payload" in data and "object" in data["payload"]:
+        obj = data["payload"]["object"]
+        if "uuid" in obj:
+            meeting_uuid = obj["uuid"]
+
+    # Case 1: Handle Zoom endpoint verification
+    if event_type == "endpoint.url_validation":
+        print(f"[{current_time}] Processing endpoint validation for endpoint {endpoint_number}")
+        print(f"[{current_time}] Full validation payload: {json.dumps(data)}")
+
+        plain_token = data.get("payload", {}).get("plainToken")
+        if not plain_token:
+            print(f"[{current_time}] Error: No plain token provided")
+            raise HTTPException(status_code=400, detail="No plain token provided")
+
+        # Get the token corresponding to this endpoint number
+        token, is_verified = config.get_token_by_endpoint_number(endpoint_number)
+        if not token:
+            print(f"[{current_time}] Error: No token configured for endpoint {endpoint_number}")
+            raise HTTPException(status_code=500, detail=f"No token configured for endpoint {endpoint_number}")
+
+        print(f"[{current_time}] Using token (first 5 chars): {token[:5]}...")
+        print(f"[{current_time}] Plain token from Zoom: {plain_token}")
+
+        # Generate hash
+        def generate_hash(message: str, secret: str) -> str:
+            return hmac.new(
+                secret.encode('utf-8'),
+                message.encode('utf-8'),
+                hashlib.sha256
+            ).hexdigest()
+
+        encrypted_token = generate_hash(plain_token, token)
+        print(f"[{current_time}] Generated encrypted token: {encrypted_token}")
+
+        # Mark this token as verified
+        config.mark_token_as_verified(token)
+
+        # Log verification status
+        verified_count = sum(1 for v in config.ZOOM_WEBHOOK_SECRET_VERIFIED.values() if v)
+        total_count = len(config.ZOOM_WEBHOOK_SECRET_TOKENS)
+        print(f"[{current_time}] Verified {verified_count} out of {total_count} accounts")
+
+        # Prepare response
+        response = {
+            "plainToken": plain_token,
+            "encryptedToken": encrypted_token
+        }
+
+        print(f"[{current_time}] Validation response: {json.dumps(response)}")
+        return JSONResponse(content=response)
+
+    # Case 2: Verify signature for regular webhook events
+    signature = request.headers.get("x-zm-signature", "")
+    timestamp = request.headers.get("x-zm-request-timestamp", "")
+
+    print(f"[{current_time}] Webhook headers - Signature: {signature}, Timestamp: {timestamp}")
+
+    if signature and timestamp:
+        # Use endpoint-specific verification
+        signature_valid = config.verify_zoom_signature_for_endpoint(
+            signature, timestamp, body, endpoint_number
+        )
+        print(f"[{current_time}] Signature verification result for endpoint {endpoint_number}: {signature_valid}")
 
         if not signature_valid:
             print(f"[{current_time}] Invalid signature - rejecting webhook")

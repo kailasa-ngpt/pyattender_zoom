@@ -31,18 +31,98 @@ curl http://localhost:8000/test -H "x-api-key: your_api_key_here"
 ```
 
 ## Webhook Handler
-### POST `/zoom/webhook`
-```bash
-# Initial Verification (no API key needed)
-curl -X POST http://localhost:8000/zoom/webhook \
-  -H "Content-Type: application/json" \
-  -d '{"event": "endpoint.url_validation", "payload": {"plainToken": "your_plain_token"}}'
+# Multiple Zoom Webhook Endpoints
 
-# Webhook Events (no API key needed)
-curl -X POST http://localhost:8000/zoom/webhook \
-  -H "Content-Type: application/json" \
-  -d '{"event": "meeting.started", "payload": {"object": {"uuid": "meeting_uuid", "topic": "Meeting Topic"}}}'
+This application now supports multiple Zoom webhook endpoints with dedicated token verification for each endpoint.
+
+## Webhook Endpoints
+
+### Default (Legacy) Endpoint
+- **URL**: `/zoom/webhook`
+- **Verification**: Uses the next unverified token or the first token if all are verified
+- **Usage**: Backward compatibility with existing integrations
+
+### Numbered Endpoints
+- **URL**: `/zoom/webhook_{N}` where N is a number (1, 2, 3, etc.)
+- **Verification**: Uses the corresponding token from ZOOM_WEBHOOK_SECRET_{N}
+- **Usage**: Dedicated endpoints for different Zoom accounts or applications
+
+## Configuration
+
+Configure your `.env` file to match the numbered endpoints:
+
 ```
+# Token for endpoint /zoom/webhook_1
+ZOOM_WEBHOOK_SECRET_1=your_first_token|verification_status
+
+# Token for endpoint /zoom/webhook_2
+ZOOM_WEBHOOK_SECRET_2=your_second_token|verification_status
+
+# Token for endpoint /zoom/webhook_3
+ZOOM_WEBHOOK_SECRET_3=your_third_token|verification_status
+```
+
+Each token includes a verification status (`true` or `false`), which is automatically updated when the endpoint is successfully validated.
+
+## Example Usage
+
+### Endpoint Validation
+---
+```bash
+# Validate endpoint 1
+curl -X POST http://localhost:8188/zoom/webhook_1 \
+  -H "Content-Type: application/json" \
+  -d '{"event": "endpoint.url_validation", "payload": {"plainToken": "token_from_zoom"}}'
+
+# Validate endpoint 2
+curl -X POST http://localhost:8188/zoom/webhook_2 \
+  -H "Content-Type: application/json" \
+  -d '{"event": "endpoint.url_validation", "payload": {"plainToken": "token_from_zoom"}}'
+```
+
+### Webhook Events
+```bash
+# Send event to endpoint 1
+curl -X POST http://localhost:8188/zoom/webhook_1 \
+  -H "Content-Type: application/json" \
+  -H "x-zm-signature: v0=hash_signature" \
+  -H "x-zm-request-timestamp: timestamp" \
+  -d '{"event": "meeting.started", "payload": {"object": {"uuid": "meeting_uuid"}}}'
+
+# Send event to endpoint 2
+curl -X POST http://localhost:8188/zoom/webhook_2 \
+  -H "Content-Type: application/json" \
+  -H "x-zm-signature: v0=hash_signature" \
+  -H "x-zm-request-timestamp: timestamp" \
+  -d '{"event": "meeting.started", "payload": {"object": {"uuid": "meeting_uuid"}}}'
+```
+
+## Zoom Configuration
+
+In the Zoom Developer Portal:
+
+1. For the first account/app:
+   - Set Event Notification Endpoint URL to: `https://your-domain.com/zoom/webhook_1`
+
+2. For the second account/app:
+   - Set Event Notification Endpoint URL to: `https://your-domain.com/zoom/webhook_2`
+
+And so on for additional accounts or applications.
+
+## Checking Verification Status
+
+```bash
+curl http://localhost:8188/verification-status -H "x-api-key: your_api_key_here"
+```
+
+This will show the verification status of all configured tokens.
+
+## Security Considerations
+
+- Each endpoint uses its own dedicated token for verification
+- The system still supports both signature verification and custom header verification
+- All security best practices from the original implementation are maintained
+---
 
 ## Active Meetings
 ### GET `/meetings`
