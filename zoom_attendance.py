@@ -6,17 +6,15 @@ import hmac
 import hashlib
 import pathlib
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
+from fastapi.middleware.base import BaseHTTPMiddleware
 from typing import Dict, List, Any, Optional, Set
 import google.generativeai as genai
 import asyncio
 
 # Load environment variables
 load_dotenv()
-
-# Initialize FastAPI app
-app = FastAPI()
 
 # App configuration
 class Config:
@@ -26,6 +24,11 @@ class Config:
     ROSTER_TABLE_ID = os.getenv("ROSTER_TABLE_ID", "m1848aw7em1uz9g")
     ATTENDANCE_TABLE_ID = os.getenv("ATTENDANCE_TABLE_ID", "mbur916jgs0m7ua")
     UNIDENTIFIED_TABLE_ID = os.getenv("UNIDENTIFIED_TABLE_ID", "mhsf4s0jhp90gnn")
+
+    # API Key Authentication
+    API_KEY = os.getenv("API_KEY")
+    API_KEY_ENABLED = os.getenv("API_KEY_ENABLED", "true").lower() == "true"
+    API_KEY_HEADER_NAME = os.getenv("API_KEY_HEADER_NAME", "x-api-key")
 
     # Zoom webhook verification
     ZOOM_WEBHOOK_SECRET_TOKENS = []
@@ -44,6 +47,13 @@ class Config:
 
     def __init__(self):
         self.load_zoom_tokens_from_env()
+        self.validate_api_key_config()
+
+    def validate_api_key_config(self):
+        """Validate API key configuration"""
+        if self.API_KEY_ENABLED and not self.API_KEY:
+            print("WARNING: API key authentication is enabled but no API key is set. Set API_KEY in your .env file.")
+            self.API_KEY_ENABLED = False
 
     def load_zoom_tokens_from_env(self):
         """Load webhook secret tokens and their verification status from environment variables"""
@@ -206,6 +216,36 @@ class Config:
 
 # Create config instance
 config = Config()
+
+# Initialize FastAPI app
+app = FastAPI()
+
+# API Key Middleware
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Skip API key check for Zoom webhook endpoint
+        if request.url.path == "/zoom/webhook":
+            return await call_next(request)
+
+        # Skip API key check if API key authentication is disabled
+        if not config.API_KEY_ENABLED:
+            return await call_next(request)
+
+        # Get API key from request header
+        api_key = request.headers.get(config.API_KEY_HEADER_NAME)
+
+        # Validate API key
+        if api_key != config.API_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid API key or missing API key header"}
+            )
+
+        # Continue with the request
+        return await call_next(request)
+
+# Add API key middleware to app
+app.add_middleware(APIKeyMiddleware)
 
 # Configure Gemini if API key is available
 if config.GOOGLE_API_KEY:

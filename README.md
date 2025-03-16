@@ -1,9 +1,27 @@
 # Zoom Webhook Application Endpoints
 
+## Authentication
+
+The application uses API key authentication for all endpoints except the Zoom webhook endpoint. 
+To authenticate, include the `x-api-key` header in your requests:
+
+```
+x-api-key: your_api_key_here
+```
+
+You can configure the API key in the `.env` file:
+```
+API_KEY=your_api_key_here
+API_KEY_ENABLED=true
+API_KEY_HEADER_NAME=x-api-key
+```
+
+Note: The `/zoom/webhook` endpoint does not require the API key as it needs to be accessible to Zoom.
+
 ## Health Check
 ### GET `/test`
 ```bash
-curl http://localhost:8000/test
+curl http://localhost:8000/test -H "x-api-key: your_api_key_here"
 ```
 **Response:**
 ```json
@@ -15,12 +33,12 @@ curl http://localhost:8000/test
 ## Webhook Handler
 ### POST `/zoom/webhook`
 ```bash
-# Initial Verification
+# Initial Verification (no API key needed)
 curl -X POST http://localhost:8000/zoom/webhook \
   -H "Content-Type: application/json" \
   -d '{"event": "endpoint.url_validation", "payload": {"plainToken": "your_plain_token"}}'
 
-# Webhook Events
+# Webhook Events (no API key needed)
 curl -X POST http://localhost:8000/zoom/webhook \
   -H "Content-Type: application/json" \
   -d '{"event": "meeting.started", "payload": {"object": {"uuid": "meeting_uuid", "topic": "Meeting Topic"}}}'
@@ -29,7 +47,7 @@ curl -X POST http://localhost:8000/zoom/webhook \
 ## Active Meetings
 ### GET `/meetings`
 ```bash
-curl http://localhost:8000/meetings
+curl http://localhost:8000/meetings -H "x-api-key: your_api_key_here"
 ```
 **Response:**
 ```json
@@ -48,7 +66,7 @@ curl http://localhost:8000/meetings
 ## Verification Status
 ### GET `/verification-status`
 ```bash
-curl http://localhost:8000/verification-status
+curl http://localhost:8000/verification-status -H "x-api-key: your_api_key_here"
 ```
 **Response:**
 ```json
@@ -67,7 +85,7 @@ curl http://localhost:8000/verification-status
 ### POST `/reset-token`
 ```bash
 # Reset all tokens
-curl -X POST http://localhost:8000/reset-token
+curl -X POST http://localhost:8000/reset-token -H "x-api-key: your_api_key_here"
 ```
 **Response:**
 ```json
@@ -82,6 +100,7 @@ curl -X POST http://localhost:8000/reset-token
 # Reset specific token (optional)
 curl -X POST http://localhost:8000/reset-token \
   -H "Content-Type: application/json" \
+  -H "x-api-key: your_api_key_here" \
   -d '{"token": "your_webhook_secret_token"}'
 ```
 **Response:**
@@ -96,7 +115,7 @@ curl -X POST http://localhost:8000/reset-token \
 ## Generate Reports Manually
 ### GET `/generate-reports/{meeting_uuid}`
 ```bash
-curl http://localhost:8000/generate-reports/your_meeting_uuid
+curl http://localhost:8000/generate-reports/your_meeting_uuid -H "x-api-key: your_api_key_here"
 ```
 **Response:**
 ```json
@@ -121,8 +140,14 @@ curl http://localhost:8000/generate-reports/your_meeting_uuid
 
 ## Environment Configuration
 
-Create a `.env` file with your Zoom webhook secret tokens:
+Create a `.env` file with your configuration:
 ```
+# API Key Authentication
+API_KEY=your_api_key_here
+API_KEY_ENABLED=true
+API_KEY_HEADER_NAME=x-api-key
+
+# Zoom Webhook Secret Tokens
 ZOOM_WEBHOOK_SECRET_1=your_first_token|false
 ZOOM_WEBHOOK_SECRET_2=your_second_token|true
 ZOOM_WEBHOOK_SECRET_3=your_third_token|false
