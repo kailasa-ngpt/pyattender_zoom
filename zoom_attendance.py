@@ -366,10 +366,11 @@ class AttendanceProcessor:
                     system_instruction="""
                     You are an attendance matching assistant. Your job is to match participant names from
                     Zoom meetings with their official names in a roster database.
-                    - Consider common variations, nicknames, and misspellings.
+                    - Consider misspellings.
                     - Consider partial names (first name only, last name only).
                     - Consider spiritual names if available.
                     - Return the best match with confidence score.
+                    - names must semantically match.
                     """
                 )
                 print("Successfully initialized Gemini AI model")
