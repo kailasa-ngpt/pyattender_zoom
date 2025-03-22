@@ -368,9 +368,9 @@ class AttendanceProcessor:
                     Zoom meetings with their official names in a roster database.
                     - Consider misspellings.
                     - Consider partial names (first name only, last name only).
-                    - Consider spiritual names if available.
+                    - When considering spiritual names, "Sri Nithya" is prefix and "Ananda" can also be prefix or suffix. The name in the middle is there actual name. For ex; if the name is "Sri Nithya Jnanapradhatha" "Sri Nithya" is prefix, Jnanapradhatha is the actual name, so matching should be done based on this name.
+                    - Prioritize trying to match the people who join based on the spelling of their names and not on impractical assumptions.
                     - Return the best match with confidence score.
-                    - names must semantically match.
                     """
                 )
                 print("Successfully initialized Gemini AI model")
@@ -514,8 +514,9 @@ class AttendanceProcessor:
         1. The participant might use only their first name or last name
         2. The participant might use a nickname or variation of their name
         3. The participant might use their spiritual name instead
+            - When considering spiritual names, "Sri Nithya" is prefix and "Ananda" can also be prefix or suffix. The name in the middle is there actual name. For ex; if the name is "Sri Nithya Jnanapradhatha" "Sri Nithya" is prefix, Jnanapradhatha is the actual name, so matching should be done based on this name.
+                    - Prioritize trying to match the people who join based on the spelling of their names and not on impractical assumptions.
         4. The participant name might have typos or spelling variations
-        5. The participant might join with a completely different name (family member's device, etc.)
 
         If the confidence is below 0.6, report no match found.
 
