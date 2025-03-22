@@ -683,82 +683,30 @@ class AttendanceProcessor:
 
     async def process_participant_joined(self, webhook_data):
         """Process participant joined event and handle attendance marking."""
-        if "payload" not in webhook_data or "object" not in webhook_data["payload"]:
-            return {"status": "error", "message": "Invalid webhook data format"}
+        try:
+            if "payload" not in webhook_data or "object" not in webhook_data["payload"]:
+                return {"status": "error", "message": "Invalid webhook data format"}
 
-        obj = webhook_data["payload"]["object"]
-        participant = obj.get("participant", {})
+            obj = webhook_data["payload"]["object"]
+            participant = obj.get("participant", {})
 
-        participant_name = participant.get("user_name", "Unknown")
-        join_time = participant.get("join_time")
+            participant_name = participant.get("user_name", "Unknown")
+            join_time = participant.get("join_time")
 
-        # Get today's date in YYYY-MM-DD format from the join_time
-        if join_time:
-            today_date = join_time.split("T")[0]  # Extract YYYY-MM-DD from ISO format
-        else:
-            # Fallback to current date if join_time is not available
-            today_date = datetime.datetime.now().strftime("%Y-%m-%d")
+            # Get today's date in YYYY-MM-DD format from the join_time
+            if join_time:
+                today_date = join_time.split("T")[0]  # Extract YYYY-MM-DD from ISO format
+            else:
+                # Fallback to current date if join_time is not available
+                today_date = datetime.datetime.now().strftime("%Y-%m-%d")
 
-        # Get roster list
-        roster = await self.get_roster()
+            # Get roster list
+            roster = await self.get_roster()
 
-        # Try Gemini AI first if enabled
-        if config.USE_AI_MATCHING:
-            try:
-                match_result = await self.match_participant_with_roster(participant_name, roster)
+            if not roster:
+                print(f"Warning: Empty roster data, cannot match participant: {participant_name}")
 
-                # Check if we got a valid result from Gemini
-                if "matchedPersonId" in match_result:
-                    person_id = match_result.get("matchedPersonId")
-                    confidence = match_result.get("confidence", 0)
-                    reasoning = match_result.get("reasoning", "")
-
-                    # Log the AI matching attempt
-                    print(f"AI Matching '{participant_name}': ID={person_id}, Confidence={confidence}")
-                else:
-                    # If Gemini didn't return a valid structure, use fallback
-                    raise ValueError("Invalid AI matching result structure")
-            except Exception as e:
-                # Log the error and fall back to simple matching
-                print(f"AI matching failed, using fallback: {str(e)}")
-                match_result = self.simple_name_matching(participant_name, roster)
-                person_id = match_result.get("matchedPersonId")
-                confidence = match_result.get("confidence", 0)
-                reasoning = match_result.get("reasoning", "") + " (via fallback matching)"
-
-                # Log the fallback matching attempt
-                print(f"Fallback matching '{participant_name}': ID={person_id}, Confidence={confidence}, Reason={reasoning}")
-        else:
-            # AI matching is disabled, use simple matching directly
-            match_result = self.simple_name_matching(participant_name, roster)
-            person_id = match_result.get("matchedPersonId")
-            confidence = match_result.get("confidence", 0)
-            reasoning = match_result.get("reasoning", "")
-
-            # Log the matching attempt
-            print(f"Simple matching '{participant_name}': ID={person_id}, Confidence={confidence}, Reason={reasoning}")
-
-        if person_id and confidence >= config.CONFIDENCE_THRESHOLD:
-            # Found a match with good confidence - mark attendance
-            try:
-                attendance_result = await self.mark_attendance(person_id, today_date)
-                return {
-                    "status": "success",
-                    "action": "marked_attendance",
-                    "personId": person_id,
-                    "confidence": confidence,
-                    "reasoning": reasoning
-                }
-            except Exception as e:
-                return {
-                    "status": "error",
-                    "message": f"Failed to mark attendance: {str(e)}",
-                    "personId": person_id,
-                    "confidence": confidence
-                }
-        else:
-            # No good match found - log as unidentified
-            try:
+                # Still record the unmatched participant
                 unidentified_result = await self.log_unidentified_participant(
                     participant_name, join_time, today_date
                 )
@@ -766,14 +714,104 @@ class AttendanceProcessor:
                     "status": "success",
                     "action": "logged_unidentified",
                     "name": participant_name,
-                    "confidence": confidence,
-                    "reasoning": reasoning
+                    "confidence": 0,
+                    "reasoning": "Empty roster"
                 }
-            except Exception as e:
-                return {
-                    "status": "error",
-                    "message": f"Failed to log unidentified participant: {str(e)}"
-                }
+
+            # Initialize match variables
+            match_result = None
+            person_id = None
+            confidence = 0
+            reasoning = ""
+
+            # Try Gemini AI first if enabled
+            if config.USE_AI_MATCHING:
+                try:
+                    match_result = await self.match_participant_with_roster(participant_name, roster)
+
+                    # Check if we got a valid result from Gemini
+                    if match_result and "matchedPersonId" in match_result:
+                        person_id = match_result.get("matchedPersonId")
+                        confidence = match_result.get("confidence", 0)
+                        reasoning = match_result.get("reasoning", "")
+
+                        # Log the AI matching attempt
+                        print(f"AI Matching '{participant_name}': ID={person_id}, Confidence={confidence}")
+                    else:
+                        # If Gemini didn't return a valid structure, use fallback
+                        raise ValueError("Invalid AI matching result structure")
+                except Exception as e:
+                    # Log the error and fall back to simple matching
+                    print(f"AI matching failed, using fallback: {str(e)}")
+                    match_result = self.simple_name_matching(participant_name, roster)
+
+                    # Check if simple matching found a match
+                    if match_result:
+                        person_id = match_result.get("matchedPersonId") or match_result.get("Id")
+                        confidence = match_result.get("confidence", 0)
+                        reasoning = match_result.get("reasoning", "") + " (via fallback matching)"
+
+                        # Log the fallback matching attempt
+                        print(f"Fallback matching '{participant_name}': ID={person_id}, Confidence={confidence}, Reason={reasoning}")
+                    else:
+                        print(f"No match found for participant: {participant_name}")
+            else:
+                # AI matching is disabled, use simple matching directly
+                match_result = self.simple_name_matching(participant_name, roster)
+
+                # Check if simple matching found a match
+                if match_result:
+                    person_id = match_result.get("matchedPersonId") or match_result.get("Id")
+                    confidence = match_result.get("confidence", 0)
+                    reasoning = match_result.get("reasoning", "")
+
+                    # Log the matching attempt
+                    print(f"Simple matching '{participant_name}': ID={person_id}, Confidence={confidence}, Reason={reasoning}")
+                else:
+                    print(f"No match found for participant: {participant_name}")
+
+            if person_id and confidence >= config.CONFIDENCE_THRESHOLD:
+                # Found a match with good confidence - mark attendance
+                try:
+                    attendance_result = await self.mark_attendance(person_id, today_date)
+                    return {
+                        "status": "success",
+                        "action": "marked_attendance",
+                        "personId": person_id,
+                        "confidence": confidence,
+                        "reasoning": reasoning
+                    }
+                except Exception as e:
+                    return {
+                        "status": "error",
+                        "message": f"Failed to mark attendance: {str(e)}",
+                        "personId": person_id,
+                        "confidence": confidence
+                    }
+            else:
+                # No good match found - log as unidentified
+                try:
+                    unidentified_result = await self.log_unidentified_participant(
+                        participant_name, join_time, today_date
+                    )
+                    return {
+                        "status": "success",
+                        "action": "logged_unidentified",
+                        "name": participant_name,
+                        "confidence": confidence,
+                        "reasoning": reasoning or "No match found or confidence too low"
+                    }
+                except Exception as e:
+                    return {
+                        "status": "error",
+                        "message": f"Failed to log unidentified participant: {str(e)}"
+                    }
+        except Exception as e:
+            # Catch all other exceptions
+            import traceback
+            print(f"Error processing participant joined: {str(e)}")
+            print(traceback.format_exc())
+            return {"status": "error", "message": f"Internal error: {str(e)}"}
 
     def store_raw_webhook(self, meeting_uuid: str, data: Dict[str, Any]) -> None:
         """Store raw webhook data to file system"""
