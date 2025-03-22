@@ -10,8 +10,8 @@ from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Dict, List, Any, Optional, Set
+import google.generativeai as genai
 import asyncio
-from openai import OpenAI  # Changed from google.generativeai
 
 # Load environment variables
 load_dotenv()
@@ -40,7 +40,7 @@ class Config:
     ZOOM_WEBHOOK_SECRET_VERIFIED = {}
 
     # AI Configuration
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Changed from GOOGLE_API_KEY
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     USE_AI_MATCHING = os.getenv("USE_AI_MATCHING", "true").lower() == "true"
     CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.6"))
 
@@ -345,13 +345,11 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 # Add API key middleware to app
 app.add_middleware(APIKeyMiddleware)
 
-# Configure OpenAI if API key is available
-# Replace Gemini configuration with OpenAI
-client = None
-if config.OPENAI_API_KEY:
-    client = OpenAI(api_key=config.OPENAI_API_KEY)
+# Configure Gemini if API key is available
+if config.GOOGLE_API_KEY:
+    genai.configure(api_key=config.GOOGLE_API_KEY)
 else:
-    print("WARNING: No OpenAI API key provided. AI matching will be disabled.")
+    print("WARNING: No Google API key provided. AI matching will be disabled.")
     config.USE_AI_MATCHING = False
 
 class AttendanceProcessor:
@@ -360,8 +358,26 @@ class AttendanceProcessor:
         self.roster_last_updated = None
         self.cache_lifetime = config.ROSTER_CACHE_SECONDS
 
-        # Initialize OpenAI client from module-level client
-        self.client = client
+        # Initialize Gemini model if AI matching is enabled
+        if config.USE_AI_MATCHING:
+            try:
+                self.model = genai.GenerativeModel(
+                    model_name="gemini-2.0-flash-001",
+                    system_instruction="""
+                    You are an attendance matching assistant. Your job is to match participant names from
+                    Zoom meetings with their official names in a roster database.
+
+                    - Match the names based on spelling ONLY, as closely as possible.
+
+                    - When considering spiritual names, "Sri Nithya" is prefix and "Ananda" can also be prefix or suffix. The name in the middle is there actual name. For ex; if the name is "Sri Nithya Jnanapradhatha" "Sri Nithya" is prefix, Jnanapradhatha is the actual name, so matching should be done based on the name in the middle.
+
+                    - Return the best match with confidence score.
+                    """
+                )
+                print("Successfully initialized Gemini AI model")
+            except Exception as e:
+                print(f"Failed to initialize Gemini AI model: {str(e)}")
+                config.USE_AI_MATCHING = False
 
     async def get_roster(self, force_refresh=False):
         """Fetch the roster from NocoDB, with caching."""
@@ -468,17 +484,12 @@ class AttendanceProcessor:
 
     async def match_participant_with_roster(self, participant_name, roster):
         """
-        Use OpenAI to match participant names with the roster.
+        Use Gemini AI to match participant names with the roster.
         Returns the matched person ID and confidence score.
-        """
-        # Skip if OpenAI is not configured
-        if not self.client:
-            return {
-                "matchedPersonId": None,
-                "confidence": 0,
-                "reasoning": "OpenAI client not initialized"
-            }
 
+        This simplified version doesn't use function calling but instead
+        relies on structured JSON output in the response.
+        """
         # Extract relevant roster information for matching
         roster_info = []
         for person in roster:
@@ -491,105 +502,95 @@ class AttendanceProcessor:
             }
             roster_info.append(person_info)
 
-        # Create roster data string
-        roster_data = ""
-        for person in roster:
-            name_parts = []
-            if person.get("firstName"):
-                name_parts.append(person.get("firstName"))
-            if person.get("lastName"):
-                name_parts.append(person.get("lastName"))
-            if person.get("spiritualName"):
-                name_parts.append(f"({person.get('spiritualName')})")
-            
-            full_name = " ".join(name_parts)
-            roster_data += f"ID: {person.get('Id')}, Name: {full_name}\n"
-
-        # Create prompt for OpenAI
+        # Create the prompt for Gemini
         prompt = f"""
-I need to match a name from a Zoom meeting attendance to our official roster with extreme precision.
-The name from Zoom is: "{participant_name}"
+        I need to match a Zoom participant with their entry in our roster database.
 
-Here is our roster (with ID numbers and names):
-{roster_data}
+        Zoom participant name: "{participant_name}"
 
-Please analyze and find the best match for the Zoom name in our roster by following these criteria:
+        Roster database (showing ID, firstName, lastName, and spiritualName if available):
+        {json.dumps(roster_info, indent=2)}
 
-1. EXACT MATCH: Check for exact matches first (ignoring case), including all parts of the name.
-2. PARTIAL MATCH: If no exact match, look for partial matches where all parts of the Zoom name appear in the roster name.
-3. COMMON NICKNAMES: Consider common nickname equivalents (e.g., Bob for Robert, Liz for Elizabeth).
-4. INITIALS: Check if the Zoom name uses initials that match the roster name.
-5. TRANSPOSITION: Check for name parts in different orders (e.g., "Smith John" vs "John Smith").
-6. SPELLING VARIATIONS: Consider common spelling variations or typos.
+        Find the best match for the participant, considering:
 
-Confidence levels:
-- HIGH: Return the ID if you're highly confident (>90%) it's the same person
-- MEDIUM: Return the ID if reasonably confident (70-90%)
-- LOW: Return the ID only if >50% confident AND specific unique elements match
-- NO MATCH: Return "NO_MATCH" if confidence is <50% or multiple equally likely matches exist
+        1. The participant name might have typos
 
-Factor in:
-- Uniqueness of name parts (rare names increase confidence)
-- Completeness of match (more matching parts = higher confidence)
-- Cultural naming patterns and variations
+        2. Match the names based on spelling ONLY, as closely as possible.
 
-Return ONLY the ID number of the best match (with no explanation), or "NO_MATCH". If no reasonable match exists, you MUST return "NO_MATCH".
-"""
+        3. When considering spiritual names, "Sri Nithya" is prefix and "Ananda" can also be prefix or suffix. The name in the middle is there actual name. For ex; if the name is "Sri Nithya Jnanapradhatha" "Sri Nithya" is prefix, Jnanapradhatha is the actual name, so matching should be done based on the name in the middle.
+
+        If the confidence is below 0.6, report no match found.
+
+        Provide your answer in this JSON format (and only this format, no explanations outside the JSON):
+        {{
+            "matchedPersonId": ID_number_or_null,
+            "confidence": confidence_score_between_0_and_1,
+            "reasoning": "brief explanation of your matching decision"
+        }}
+
+        Example:
+        {{
+            "matchedPersonId": 42,
+            "confidence": 0.85,
+            "reasoning": "The participant name 'John S.' is likely a shortened version of 'John Smith' (ID 42)"
+        }}
+
+        Or for no match:
+        {{
+            "matchedPersonId": null,
+            "confidence": 0.3,
+            "reasoning": "No convincing match found for 'XYZ User'"
+        }}
+        """
 
         try:
-            # Call OpenAI API with improved system message and settings
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",  # Use gpt-4o-mini model
-                messages=[
-                    {"role": "system", "content": "You are a precise name-matching assistant with expertise in identifying name variations, cultural naming patterns, and determining when a match should or should not be made. You prioritize accuracy over recall and will only provide a match when the evidence is sufficient."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,  # Very low temperature for highly deterministic responses
-                max_tokens=100    # Limit response length since we only need the ID
+            response = self.model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.2,
+                    "top_p": 0.95,
+                    "top_k": 40,
+                    "max_output_tokens": 2048,
+                    "response_mime_type": "application/json",
+                },
             )
 
             # Get the text response
-            text_response = response.choices[0].message.content.strip()
+            text_response = response.text
 
-            # Check if the response is "NO_MATCH"
-            if text_response == "NO_MATCH":
+            # Try to parse JSON from the response
+            try:
+                # Strip any potential markdown code block syntax
+                cleaned_text = text_response.replace("```json", "").replace("```", "").strip()
+                match_data = json.loads(cleaned_text)
+
+                # Validate the expected fields
+                if isinstance(match_data, dict) and "matchedPersonId" in match_data:
+                    return match_data
+                else:
+                    raise ValueError("Invalid response format")
+
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse JSON from response: {e}")
+                print(f"Response text: {text_response}")
+
+                # Try to extract JSON with regex as fallback
+                import re
+                json_match = re.search(r'\{.*\}', text_response, re.DOTALL)
+                if json_match:
+                    try:
+                        match_data = json.loads(json_match.group(0))
+                        if isinstance(match_data, dict) and "matchedPersonId" in match_data:
+                            return match_data
+                    except json.JSONDecodeError:
+                        pass
+
+                # Return a default response if parsing fails
                 return {
                     "matchedPersonId": None,
                     "confidence": 0,
-                    "reasoning": "No match found"
+                    "reasoning": f"Failed to parse response: {str(e)}"
                 }
-
-            # Try to extract an ID from the response
-            # First, check if the response is just a number
-            if text_response.isdigit():
-                # Find the corresponding person
-                for person in roster:
-                    if str(person.get("Id")) == text_response:
-                        return {
-                            "matchedPersonId": person.get("Id"),
-                            "confidence": 0.8,  # Default confidence for clear matches
-                            "reasoning": "Direct ID match"
-                        }
-
-            # Fallback: try to extract any number from the response
-            import re
-            id_match = re.search(r'\d+', text_response)
-            if id_match:
-                potential_id = id_match.group(0)
-                for person in roster:
-                    if str(person.get("Id")) == potential_id:
-                        return {
-                            "matchedPersonId": person.get("Id"),
-                            "confidence": 0.7,  # Lower confidence for extracted ID
-                            "reasoning": "Extracted ID from response"
-                        }
-
-            # If we got here, we couldn't find a clear match
-            return {
-                "matchedPersonId": None,
-                "confidence": 0,
-                "reasoning": f"Couldn't extract ID from response: {text_response}"
-            }
 
         except Exception as e:
             print(f"Error in AI matching: {str(e)}")
@@ -598,6 +599,8 @@ Return ONLY the ID number of the best match (with no explanation), or "NO_MATCH"
                 "confidence": 0,
                 "reasoning": f"Error in AI processing: {str(e)}"
             }
+
+    # Fix for the simple_name_matching method
 
     def simple_name_matching(self, participant_name, roster):
         """
@@ -721,12 +724,12 @@ Return ONLY the ID number of the best match (with no explanation), or "NO_MATCH"
             confidence = 0
             reasoning = ""
 
-            # Try OpenAI AI first if enabled
+            # Try Gemini AI first if enabled
             if config.USE_AI_MATCHING:
                 try:
                     match_result = await self.match_participant_with_roster(participant_name, roster)
 
-                    # Check if we got a valid result
+                    # Check if we got a valid result from Gemini
                     if match_result and "matchedPersonId" in match_result:
                         person_id = match_result.get("matchedPersonId")
                         confidence = match_result.get("confidence", 0)
@@ -735,7 +738,7 @@ Return ONLY the ID number of the best match (with no explanation), or "NO_MATCH"
                         # Log the AI matching attempt
                         print(f"AI Matching '{participant_name}': ID={person_id}, Confidence={confidence}")
                     else:
-                        # If OpenAI didn't return a valid structure, use fallback
+                        # If Gemini didn't return a valid structure, use fallback
                         raise ValueError("Invalid AI matching result structure")
                 except Exception as e:
                     # Log the error and fall back to simple matching
@@ -744,9 +747,9 @@ Return ONLY the ID number of the best match (with no explanation), or "NO_MATCH"
 
                     # Check if simple matching found a match
                     if match_result:
-                        person_id = match_result.get("Id")
-                        confidence = 0.7  # Default confidence for simple matching
-                        reasoning = "Match found via fallback matching"
+                        person_id = match_result.get("matchedPersonId") or match_result.get("Id")
+                        confidence = match_result.get("confidence", 0)
+                        reasoning = match_result.get("reasoning", "") + " (via fallback matching)"
 
                         # Log the fallback matching attempt
                         print(f"Fallback matching '{participant_name}': ID={person_id}, Confidence={confidence}, Reason={reasoning}")
@@ -758,9 +761,9 @@ Return ONLY the ID number of the best match (with no explanation), or "NO_MATCH"
 
                 # Check if simple matching found a match
                 if match_result:
-                    person_id = match_result.get("Id")
-                    confidence = 0.7  # Default confidence for simple matching
-                    reasoning = "Match found via simple name matching"
+                    person_id = match_result.get("matchedPersonId") or match_result.get("Id")
+                    confidence = match_result.get("confidence", 0)
+                    reasoning = match_result.get("reasoning", "")
 
                     # Log the matching attempt
                     print(f"Simple matching '{participant_name}': ID={person_id}, Confidence={confidence}, Reason={reasoning}")
@@ -944,6 +947,7 @@ async def zoom_webhook(request: Request):
         result = await attendance_processor.process_participant_joined(data)
         print(f"[{current_time}] Participant processing result: {json.dumps(result)}")
         return result
+        return {"status": "success", "message": "Participant joined event received"}
     else:
         # For other event types, just acknowledge receipt
         print(f"[{current_time}] Event {event_type} received but not processed")
@@ -991,7 +995,7 @@ async def zoom_webhook_underscore(endpoint_number: str, request: Request):
         if "uuid" in obj:
             meeting_uuid = obj["uuid"]
 
-    # Case 1: Handle Zoom endpoint validation
+    # Case 1: Handle Zoom endpoint verification
     if event_type == "endpoint.url_validation":
         print(f"[{current_time}] Processing endpoint validation for endpoint {endpoint_number}")
         print(f"[{current_time}] Full validation payload: {json.dumps(data)}")
@@ -1065,6 +1069,7 @@ async def zoom_webhook_underscore(endpoint_number: str, request: Request):
         result = await attendance_processor.process_participant_joined(data)
         print(f"[{current_time}] Participant processing result: {json.dumps(result)}")
         return result
+        return {"status": "success", "message": "Participant joined event received"}
     else:
         # For other event types, just acknowledge receipt
         print(f"[{current_time}] Event {event_type} received but not processed")
@@ -1172,18 +1177,11 @@ async def debug_info():
 
         # Test AI model if enabled
         ai_status = "Disabled"
-        if config.USE_AI_MATCHING and client:
+        if config.USE_AI_MATCHING:
             try:
-                # Simple test of the OpenAI model
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": "You are a helpful assistant."},
-                        {"role": "user", "content": "Hello, are you working?"}
-                    ],
-                    max_tokens=10
-                )
-                ai_status = f"OK - Response: {response.choices[0].message.content[:50]}..."
+                # Simple test of the AI model
+                response = attendance_processor.model.generate_content("Hello, are you working?")
+                ai_status = f"OK - Response: {response.text[:50]}..."
             except Exception as e:
                 ai_status = f"Error: {str(e)}"
 
@@ -1207,8 +1205,7 @@ async def debug_info():
                 "USE_AI_MATCHING": config.USE_AI_MATCHING,
                 "CONFIDENCE_THRESHOLD": config.CONFIDENCE_THRESHOLD,
                 "DEBUG_MODE": config.DEBUG_MODE,
-                "ROSTER_CACHE_SECONDS": config.ROSTER_CACHE_SECONDS,
-                "AI_BACKEND": "OpenAI" if config.OPENAI_API_KEY else "None"
+                "ROSTER_CACHE_SECONDS": config.ROSTER_CACHE_SECONDS
             },
             "status_checks": {
                 "nocodb_connection": nocodb_status,
@@ -1236,7 +1233,7 @@ async def refresh_roster():
 
 @app.post("/test-matching")
 async def test_matching(request: Request):
-    """Test the OpenAI name matching."""
+    """Test the Gemini AI name matching."""
     data = await request.json()
     name = data.get("name")
     if not name:
@@ -1262,8 +1259,8 @@ async def test_matching(request: Request):
     person_id = None
     if config.USE_AI_MATCHING and "ai_match" in results and results["ai_match"].get("matchedPersonId"):
         person_id = results["ai_match"]["matchedPersonId"]
-    elif simple_match and simple_match.get("Id"):
-        person_id = simple_match.get("Id")
+    elif results["simple_match"].get("matchedPersonId"):
+        person_id = results["simple_match"]["matchedPersonId"]
 
     if person_id:
         person_details = next((p for p in roster if p.get("Id") == person_id), None)
