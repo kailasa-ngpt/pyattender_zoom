@@ -600,72 +600,86 @@ class AttendanceProcessor:
                 "reasoning": f"Error in AI processing: {str(e)}"
             }
 
+    # Fix for the simple_name_matching method
+
     def simple_name_matching(self, participant_name, roster):
         """
-        A simple fallback name matching algorithm that doesn't rely on AI.
-        Returns the matched person ID and confidence score.
+        Match a participant name from Zoom to a person in the roster using simple string matching.
+
+        Args:
+            participant_name (str): Name of the participant from Zoom
+            roster (list): List of people from the roster
+
+        Returns:
+            dict: The matched person from the roster, or None if no match found
         """
-        participant_name = participant_name.lower()
+        if not participant_name or not roster:
+            return None
+
+        # Clean and normalize the participant name
+        participant_name = participant_name.lower().strip()
+
+        # Try to find exact matches first
+        for person in roster:
+            # Skip if person is None
+            if person is None:
+                continue
+
+            # Get first and last names, with fallback to empty string for None values
+            first_name = (person.get("firstName") or "").lower()
+            last_name = (person.get("lastName") or "").lower()
+            spiritual_name = (person.get("spiritualName") or "").lower()
+
+            # Check for exact matches
+            full_name = f"{first_name} {last_name}".strip()
+            if participant_name == full_name:
+                return person
+
+            # Check reversed name (last name first)
+            reversed_name = f"{last_name} {first_name}".strip()
+            if participant_name == reversed_name:
+                return person
+
+            # Check spiritual name matches if available
+            if spiritual_name and participant_name == spiritual_name:
+                return person
+
+        # If no exact match, try partial matches
         best_match = None
         best_score = 0
-        reasoning = ""
 
         for person in roster:
-            person_id = person.get("Id")
-            first_name = person.get("firstName", "").lower()
-            last_name = person.get("lastName", "").lower()
-            spiritual_name = person.get("spiritualName", "").lower() if person.get("spiritualName") else ""
-            full_name = f"{first_name} {last_name}".strip()
+            # Skip if person is None
+            if person is None:
+                continue
 
-            # Check exact matches first (high confidence)
-            if participant_name == full_name:
-                return {"matchedPersonId": person_id, "confidence": 0.95, "reasoning": "Exact full name match"}
+            # Get first and last names, with fallback to empty string for None values
+            first_name = (person.get("firstName") or "").lower()
+            last_name = (person.get("lastName") or "").lower()
+            spiritual_name = (person.get("spiritualName") or "").lower()
 
-            if spiritual_name and participant_name == spiritual_name:
-                return {"matchedPersonId": person_id, "confidence": 0.9, "reasoning": "Exact spiritual name match"}
+            # Calculate match scores
+            score = 0
 
-            if participant_name == first_name:
-                return {"matchedPersonId": person_id, "confidence": 0.85, "reasoning": "Exact first name match"}
+            # Check if first name is in participant name
+            if first_name and first_name in participant_name:
+                score += len(first_name)
 
-            if participant_name == last_name:
-                return {"matchedPersonId": person_id, "confidence": 0.8, "reasoning": "Exact last name match"}
+            # Check if last name is in participant name
+            if last_name and last_name in participant_name:
+                score += len(last_name)
 
-            # Check if participant name is contained within any name fields
-            if spiritual_name and participant_name in spiritual_name:
-                score = 0.75
-                if score > best_score:
-                    best_score = score
-                    best_match = person_id
-                    reasoning = "Partial spiritual name match"
+            # Check if spiritual name is in participant name
+            if spiritual_name and spiritual_name in participant_name:
+                score += len(spiritual_name)
 
-            if participant_name in full_name:
-                score = 0.7
-                if score > best_score:
-                    best_score = score
-                    best_match = person_id
-                    reasoning = "Partial full name match"
+            # Update best match if this score is higher
+            if score > best_score:
+                best_score = score
+                best_match = person
 
-            if first_name in participant_name or last_name in participant_name:
-                score = 0.65
-                if score > best_score:
-                    best_score = score
-                    best_match = person_id
-                    reasoning = "Name contained in participant name"
-
-            # Check if any part of participant name is in any name fields
-            name_parts = participant_name.split()
-            for part in name_parts:
-                if part in first_name or part in last_name or (spiritual_name and part in spiritual_name):
-                    score = 0.6
-                    if score > best_score:
-                        best_score = score
-                        best_match = person_id
-                        reasoning = f"Partial match on name component: {part}"
-
-        if best_match and best_score >= 0.6:
-            return {"matchedPersonId": best_match, "confidence": best_score, "reasoning": reasoning}
-        else:
-            return {"matchedPersonId": None, "confidence": best_score, "reasoning": "No confident match found"}
+        # Return the best match if it meets a minimum threshold (adjust as needed)
+        return best_match if best_score > 2 else None
 
     async def process_participant_joined(self, webhook_data):
         """Process participant joined event and handle attendance marking."""
