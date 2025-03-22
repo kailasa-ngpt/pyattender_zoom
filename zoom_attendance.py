@@ -366,10 +366,11 @@ class AttendanceProcessor:
                     system_instruction="""
                     You are an attendance matching assistant. Your job is to match participant names from
                     Zoom meetings with their official names in a roster database.
-                    - Consider misspellings.
-                    - Consider partial names (first name only, last name only).
-                    - When considering spiritual names, "Sri Nithya" is prefix and "Ananda" can also be prefix or suffix. The name in the middle is there actual name. For ex; if the name is "Sri Nithya Jnanapradhatha" "Sri Nithya" is prefix, Jnanapradhatha is the actual name, so matching should be done based on this name.
-                    - Prioritize trying to match the people who join based on the spelling of their names and not on impractical assumptions.
+
+                    - Match the names based on spelling ONLY, as closely as possible.
+
+                    - When considering spiritual names, "Sri Nithya" is prefix and "Ananda" can also be prefix or suffix. The name in the middle is there actual name. For ex; if the name is "Sri Nithya Jnanapradhatha" "Sri Nithya" is prefix, Jnanapradhatha is the actual name, so matching should be done based on the name in the middle.
+
                     - Return the best match with confidence score.
                     """
                 )
@@ -511,12 +512,12 @@ class AttendanceProcessor:
         {json.dumps(roster_info, indent=2)}
 
         Find the best match for the participant, considering:
-        1. The participant might use only their first name or last name
-        2. The participant might use a nickname or variation of their name
-        3. The participant might use their spiritual name instead
-            - When considering spiritual names, "Sri Nithya" is prefix and "Ananda" can also be prefix or suffix. The name in the middle is there actual name. For ex; if the name is "Sri Nithya Jnanapradhatha" "Sri Nithya" is prefix, Jnanapradhatha is the actual name, so matching should be done based on this name.
-                    - Prioritize trying to match the people who join based on the spelling of their names and not on impractical assumptions.
-        4. The participant name might have typos or spelling variations
+
+        1. The participant name might have typos
+
+        2. Match the names based on spelling ONLY, as closely as possible.
+
+        3. When considering spiritual names, "Sri Nithya" is prefix and "Ananda" can also be prefix or suffix. The name in the middle is there actual name. For ex; if the name is "Sri Nithya Jnanapradhatha" "Sri Nithya" is prefix, Jnanapradhatha is the actual name, so matching should be done based on the name in the middle.
 
         If the confidence is below 0.6, report no match found.
 
