@@ -7,8 +7,11 @@ wheels/
 *.egg-info
 .env
 .env.2
+.env.example
+.env.archive
 Raw/
 Reports/
+data/
 
 # Virtual environments
 .venv
