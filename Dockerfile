@@ -11,10 +11,10 @@ COPY *.py .
 COPY .env* ./
 
 # Create directories for data persistence
-RUN mkdir -p Raw
+RUN mkdir -p data
 
 # Expose the port the app runs on
-EXPOSE 8188
+EXPOSE 8000
 
 # Command to run the application
-CMD ["uvicorn", "zoom_attendance:app", "--host", "0.0.0.0", "--port", "8188"]
+CMD ["uvicorn", "zoom_attendance:app", "--host", "0.0.0.0", "--port", "8000"]

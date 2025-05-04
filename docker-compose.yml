@@ -5,13 +5,15 @@ services:
     build: .
     container_name: pyattender
     ports:
-      - "8188:8188"
+      - "8188:8000"
     volumes:
       - ./Raw:/app/Raw
       - ./.env:/app/.env
+      - ./data:/app/data
+      
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8188/test"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/test"]
       interval: 30s
       timeout: 10s
       retries: 3
