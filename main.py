@@ -107,6 +107,14 @@ async def category_webhook(category: str, request: Request):
         body = await request.body()
         body_str = body.decode("utf-8")
 
+        # Log the entire POST request (method, url, headers, body)
+        print("================ POST REQUEST ================")
+        print(f"Method: {request.method}")
+        print(f"URL: {request.url}")
+        print(f"Headers: {dict(request.headers)}")
+        print(f"Body: {body_str}")
+        print("==============================================")
+
         # Log the raw request details with more visibility
         log_timestamp(f"WEBHOOK: Raw webhook received for category '{category}': {body_str[:500]}...")
         log_timestamp(f"WEBHOOK: Headers: {dict(request.headers)}")
